@@ -478,6 +478,10 @@ pub struct SidebarConfig {
     /// Custom templates for sidebar rendering.
     pub templates: Option<TemplatesConfig>,
 
+    /// Collect Git status and GitHub pull request/check data for the sidebar.
+    /// This daemon-wide setting is read only from global config. Default: true.
+    pub git_status: Option<bool>,
+
     /// Per-agent icon overrides.
     pub agent_icons: Option<AgentIcons>,
 
@@ -499,6 +503,10 @@ pub struct SidebarConfig {
 }
 
 impl SidebarConfig {
+    pub fn git_status(&self) -> bool {
+        self.git_status.unwrap_or(true)
+    }
+
     pub fn dim_stale(&self) -> bool {
         self.dim_stale.unwrap_or(true)
     }
@@ -3079,6 +3087,7 @@ impl Config {
                 self.sidebar.templates.as_ref(),
                 project.sidebar.templates.as_ref(),
             ),
+            git_status: self.sidebar.git_status,
             agent_icons: match (
                 self.sidebar.agent_icons.clone(),
                 project.sidebar.agent_icons.clone(),
@@ -4777,6 +4786,31 @@ sidebar:
         let global: Config = serde_yaml::from_str("stale_after: 5h\n").unwrap();
         let project: Config = serde_yaml::from_str("{}\n").unwrap();
         assert_eq!(global.merge(project).stale_after_secs(), 5 * 60 * 60);
+    }
+
+    #[test]
+    fn sidebar_git_status_defaults_true_and_ignores_project_override() {
+        let default_config = Config::default();
+        assert!(default_config.sidebar.git_status());
+
+        let global: Config = serde_yaml::from_str(
+            r#"
+sidebar:
+  git_status: false
+"#,
+        )
+        .unwrap();
+        let project: Config = serde_yaml::from_str(
+            r#"
+sidebar:
+  git_status: true
+"#,
+        )
+        .unwrap();
+        let merged = global.merge(project);
+
+        assert_eq!(merged.sidebar.git_status, Some(false));
+        assert!(!merged.sidebar.git_status());
     }
 
     #[test]

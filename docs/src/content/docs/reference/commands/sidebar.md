@@ -94,6 +94,7 @@ sidebar:
   width: 40 # left width in columns (default: "10%", clamped 25-50)
   # width: "15%"
   layout: tiles # left only: "compact" or "tiles" (default)
+  git_status: true # collect Git status and GitHub PR/check data (default)
   dim_stale: true # dim stale agents using stale_after
   group_by: project # "project" or "session"; unset keeps one flat list
   collapse_stale: true # while grouped, fold stale agents behind a toggle
@@ -113,6 +114,11 @@ sidebar:
       - "{secondary} {fill} {git_stats}"
       - "{pane_title}"
 ```
+
+Set `sidebar.git_status: false` in the global config to stop the sidebar daemon
+from watching worktrees and collecting Git status. Git status, pull request, and
+check tokens then render empty. This setting is daemon-wide and does not affect
+the dashboard's independent Git status updates.
 
 Explicit width values bypass the default 25-50 column clamp (minimum 1
 column). Layout preference can also be toggled at runtime with `v` and is

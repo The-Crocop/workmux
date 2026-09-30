@@ -386,6 +386,20 @@ fn read_sidebar_position(config: &Config, tmux_value: Option<&str>) -> SidebarPo
 /// Shared git status cache, updated by a background worker thread.
 type GitCache = Arc<Mutex<HashMap<PathBuf, GitStatus>>>;
 
+fn snapshot_status_cache<T: Clone>(
+    enabled: bool,
+    cache: &Arc<Mutex<HashMap<PathBuf, T>>>,
+) -> HashMap<PathBuf, T> {
+    if !enabled {
+        return HashMap::new();
+    }
+    cache
+        .lock()
+        .ok()
+        .map(|cache| cache.clone())
+        .unwrap_or_default()
+}
+
 /// Resolve the .git directory for a worktree path.
 /// For linked worktrees, .git is a file containing "gitdir: /path/to/real/gitdir".
 fn resolve_git_dir(worktree_path: &Path) -> Option<PathBuf> {
@@ -2215,7 +2229,15 @@ pub fn run() -> Result<()> {
 
         if publish_pending && let Some((agents, tmux_state)) = &cached_inputs {
             publish_pending = false;
-            let (position, layout_mode, sort, group_by, collapse_stale, stale_threshold_secs) = {
+            let (
+                position,
+                layout_mode,
+                sort,
+                group_by,
+                collapse_stale,
+                stale_threshold_secs,
+                git_status_enabled,
+            ) = {
                 let cfg = config.lock().unwrap();
                 (
                     read_sidebar_position(&cfg, tmux_state.position.as_deref()),
@@ -2225,6 +2247,7 @@ pub fn run() -> Result<()> {
                     read_sidebar_group_by(&cfg, tmux_state.group_by.as_deref()),
                     cfg.sidebar.collapse_stale(),
                     cfg.stale_after_secs(),
+                    cfg.sidebar.git_status(),
                 )
             };
             // Folding is part of the grouped presentation: a flat list shows
@@ -2250,13 +2273,9 @@ pub fn run() -> Result<()> {
                     collapse_stale,
                     stale_threshold_secs,
                     expanded_groups: read_expanded_groups(tmux_state.expanded_groups.as_deref()),
-                    git_statuses: git_cache.lock().ok().map(|c| c.clone()).unwrap_or_default(),
-                    pr_statuses: pr_cache.lock().ok().map(|c| c.clone()).unwrap_or_default(),
-                    check_statuses: check_cache
-                        .lock()
-                        .ok()
-                        .map(|c| c.clone())
-                        .unwrap_or_default(),
+                    git_statuses: snapshot_status_cache(git_status_enabled, &git_cache),
+                    pr_statuses: snapshot_status_cache(git_status_enabled, &pr_cache),
+                    check_statuses: snapshot_status_cache(git_status_enabled, &check_cache),
                     sleeping_pane_ids: read_sleeping_panes(tmux_state.sleeping_panes.as_deref()),
                 },
                 &mut inactivity_tracker,
@@ -2273,43 +2292,51 @@ pub fn run() -> Result<()> {
             server.broadcast(&output.snapshot);
 
             let stale_threshold = output.snapshot.stale_threshold_secs;
-            let entries: Vec<GitWorkerPath> = output
-                .snapshot
-                .agents
-                .iter()
-                .map(|agent| GitWorkerPath {
-                    path: agent.path.clone(),
-                    is_stale: agent
-                        .activity_ts()
-                        .map(|ts| now_ts.saturating_sub(ts) > stale_threshold)
-                        .unwrap_or(false),
-                    is_focused: output.snapshot.active_pane_ids.contains(&agent.pane_id)
-                        || (!agent.window_id.is_empty()
-                            && output
-                                .snapshot
-                                .active_windows
-                                .contains(&(agent.session.clone(), agent.window_id.clone()))),
-                })
-                .collect();
+            let entries: Vec<GitWorkerPath> = if git_status_enabled {
+                output
+                    .snapshot
+                    .agents
+                    .iter()
+                    .map(|agent| GitWorkerPath {
+                        path: agent.path.clone(),
+                        is_stale: agent
+                            .activity_ts()
+                            .map(|ts| now_ts.saturating_sub(ts) > stale_threshold)
+                            .unwrap_or(false),
+                        is_focused: output.snapshot.active_pane_ids.contains(&agent.pane_id)
+                            || (!agent.window_id.is_empty()
+                                && output
+                                    .snapshot
+                                    .active_windows
+                                    .contains(&(agent.session.clone(), agent.window_id.clone()))),
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
             let _ = git_path_tx.send(entries);
 
-            let github_entries: Vec<GithubWorkerPath> = output
-                .snapshot
-                .agents
-                .iter()
-                .filter_map(|agent| {
-                    let branch = output
-                        .snapshot
-                        .git_statuses
-                        .get(&agent.path)?
-                        .branch
-                        .as_ref()?;
-                    Some(GithubWorkerPath {
-                        path: agent.path.clone(),
-                        branch: branch.clone(),
+            let github_entries: Vec<GithubWorkerPath> = if git_status_enabled {
+                output
+                    .snapshot
+                    .agents
+                    .iter()
+                    .filter_map(|agent| {
+                        let branch = output
+                            .snapshot
+                            .git_statuses
+                            .get(&agent.path)?
+                            .branch
+                            .as_ref()?;
+                        Some(GithubWorkerPath {
+                            path: agent.path.clone(),
+                            branch: branch.clone(),
+                        })
                     })
-                })
-                .collect();
+                    .collect()
+            } else {
+                Vec::new()
+            };
             let _ = github_path_tx.send(github_entries);
 
             let live_paths: HashSet<PathBuf> = output
@@ -3429,6 +3456,60 @@ mod tests {
             assert!(!complete.contains_key(&child));
             assert!(!reverse.values().any(|roots| roots.contains(&child)));
             assert!(reverse[&parent.join(".git")].contains(&parent));
+        }
+    }
+
+    #[test]
+    fn disabled_status_collection_hides_cached_values() {
+        let cache = Arc::new(Mutex::new(HashMap::from([(
+            PathBuf::from("/repo"),
+            GitStatus {
+                is_dirty: true,
+                ..Default::default()
+            },
+        )])));
+
+        assert_eq!(snapshot_status_cache(true, &cache).len(), 1);
+        assert!(snapshot_status_cache(false, &cache).is_empty());
+        assert_eq!(cache.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn git_worker_clears_cache_when_collection_is_disabled() {
+        struct StopWorker(Arc<AtomicBool>);
+        impl Drop for StopWorker {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::Relaxed);
+            }
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        init_repo(&repo);
+        let term = Arc::new(AtomicBool::new(false));
+        let _stop = StopWorker(term.clone());
+        let dirty = Arc::new(AtomicBool::new(false));
+        let (wake_tx, wake_rx) = mpsc::sync_channel(1);
+        let (cache, paths_tx) = spawn_git_worker(term, dirty, wake_tx);
+        paths_tx
+            .send(vec![GitWorkerPath {
+                path: repo.clone(),
+                is_stale: false,
+                is_focused: true,
+            }])
+            .unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while cache.lock().unwrap().is_empty() {
+            assert!(Instant::now() < deadline, "worker did not populate cache");
+            let _ = wake_rx.recv_timeout(Duration::from_millis(50));
+        }
+
+        paths_tx.send(Vec::new()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !cache.lock().unwrap().is_empty() {
+            assert!(Instant::now() < deadline, "worker did not clear cache");
+            let _ = wake_rx.recv_timeout(Duration::from_millis(50));
         }
     }
 
