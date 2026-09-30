@@ -806,6 +806,11 @@ pub struct Config {
     #[serde(default)]
     pub merge_keep: Option<bool>,
 
+    /// Confirm before deleting branches with commits not merged into their base.
+    /// Default: true.
+    #[serde(default)]
+    pub confirm_unmerged_removal: Option<bool>,
+
     /// Strategy for deriving worktree/window names from branch names
     #[serde(default)]
     pub worktree_naming: WorktreeNaming,
@@ -2919,6 +2924,7 @@ impl Config {
             agent,
             merge_strategy,
             merge_keep,
+            confirm_unmerged_removal,
             worktree_prefix,
             panes,
             windows,
@@ -3394,6 +3400,11 @@ pub const EXAMPLE_PROJECT_CONFIG: &str = r#"# workmux project configuration
 # Keep the worktree, window, and branch after `workmux merge` by default.
 # Keep and cleanup CLI flags always override this.
 # merge_keep: true
+
+# Confirm before deleting a branch with commits not merged into its base.
+# Set to false to remove unmerged branches while still protecting uncommitted changes.
+# Default: true.
+# confirm_unmerged_removal: false
 
 #-------------------------------------------------------------------------------
 # Naming & Paths
@@ -4274,6 +4285,15 @@ mod tests {
         assert_eq!(disabled.merge_keep, Some(false));
     }
 
+    #[test]
+    fn confirm_unmerged_removal_parses_boolean_values() {
+        let enabled: Config = serde_yaml::from_str("confirm_unmerged_removal: true").unwrap();
+        assert_eq!(enabled.confirm_unmerged_removal, Some(true));
+
+        let disabled: Config = serde_yaml::from_str("confirm_unmerged_removal: false").unwrap();
+        assert_eq!(disabled.confirm_unmerged_removal, Some(false));
+    }
+
     fn pre_remove_default_for_root(root: &std::path::Path) -> Option<Vec<String>> {
         Config::merge_and_apply_defaults(Config::default(), Config::default(), None, root)
             .unwrap()
@@ -4538,6 +4558,21 @@ mod tests {
 
         let merged = global.merge(project);
         assert_eq!(merged.merge_keep, Some(false));
+    }
+
+    #[test]
+    fn confirm_unmerged_removal_project_overrides_global() {
+        let global = Config {
+            confirm_unmerged_removal: Some(true),
+            ..Default::default()
+        };
+        let project = Config {
+            confirm_unmerged_removal: Some(false),
+            ..Default::default()
+        };
+
+        let merged = global.merge(project);
+        assert_eq!(merged.confirm_unmerged_removal, Some(false));
     }
 
     #[test]

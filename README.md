@@ -232,6 +232,7 @@ include global values alongside project-specific ones. Other settings like
 nerdfont: true # Enable nerdfont icons (prompted on first run)
 merge_strategy: rebase # Make workmux merge do rebase by default
 merge_keep: true # Keep worktree, window, and branch after merge by default
+confirm_unmerged_removal: false # Remove unmerged branches without confirmation
 agent: claude
 
 panes:
@@ -284,9 +285,10 @@ customize.
 | `window_placement` | New tmux window placement (`after_current` or `rightmost`)                                            | `after_current`             |
 | `agent`            | Default agent for `<agent>` placeholder                                                               | `claude`                    |
 | `agents`         | Named agent commands ([docs](https://workmux.raine.dev/guide/agents#named-agents), global-only)       | `{}`                        |
-| `merge_strategy` | Default merge strategy (`merge`, `rebase`, `squash`)                                                  | `merge`                     |
-| `merge_keep`     | Keep resources after `workmux merge` by default                                                       | `false`                     |
-| `theme`          | Dashboard color scheme ([custom colors](https://workmux.raine.dev/guide/configuration#custom-colors)) | `default` (auto dark/light) |
+| `merge_strategy`           | Default merge strategy (`merge`, `rebase`, `squash`)                                                  | `merge`                     |
+| `merge_keep`               | Keep resources after `workmux merge` by default                                                       | `false`                     |
+| `confirm_unmerged_removal` | Confirm before deleting branches with commits not merged into their base                               | `true`                      |
+| `theme`                    | Dashboard color scheme ([custom colors](https://workmux.raine.dev/guide/configuration#custom-colors)) | `default` (auto dark/light) |
 
 Set `base_branch: auto` to create independent work streams from each repository's
 effective main branch. Workmux uses configured `main_branch`, then the local
@@ -1333,6 +1335,10 @@ Supports removing multiple worktrees in a single command.
 - `--force`, `-f`: Skip confirmation prompt and ignore uncommitted changes
 - `--keep-branch`, `-k`: Remove only the worktree and tmux window while keeping
   the local branch
+
+Set `confirm_unmerged_removal: false` to remove branches with unmerged commits
+without an extra confirmation. Worktrees with uncommitted changes remain
+protected and still require `--force`.
 
 #### Examples
 
