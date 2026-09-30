@@ -21,6 +21,13 @@ editUrl: https://github.com/raine/workmux/edit/main/CHANGELOG.md
 <!-- skipped: v0.1.25 -->
 <!-- skipped: v0.1.8 -->
 
+## v0.1.269 (2026-09-30)
+
+- Show pull request titles and issues they close in opt-in `pr_title` and `pr_issues` columns in both dashboard tables. ([#308](https://github.com/raine/workmux/issues/308))
+- Fix Antigravity status hooks blocking tool calls; run `workmux setup` to update an existing installation. ([#309](https://github.com/raine/workmux/issues/309))
+- Set `sidebar.git_status: false` to stop sidebar Git, pull request, and check collection, reducing background CPU use in large repositories without affecting the dashboard. ([#312](https://github.com/raine/workmux/issues/312))
+- Set `confirm_unmerged_removal: false` to remove unmerged branches without an extra confirmation while continuing to protect uncommitted changes. ([#310](https://github.com/raine/workmux/issues/310))
+
 ## v0.1.268 (2026-09-26)
 
 - Prevent unrelated Claude background sessions from overwriting an interactive pane's status and session identity, while preserving status tracking for attached `/bg` continuations. ([#300](https://github.com/raine/workmux/issues/300))
