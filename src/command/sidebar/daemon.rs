@@ -2837,6 +2837,7 @@ mod tests {
             checks: None,
             check_meta: None,
             url: None,
+            closing_issues: Vec::new(),
         };
         let previous_prs = HashMap::from([
             ("answered".to_string(), pr(1)),
@@ -2993,6 +2994,7 @@ mod tests {
                 checks: None,
                 check_meta: None,
                 url: None,
+                closing_issues: Vec::new(),
             },
         );
         variants.push(changed);
@@ -3846,6 +3848,7 @@ mod tests {
                     checks: None,
                     check_meta: None,
                     url: None,
+                    closing_issues: Vec::new(),
                 },
             },
         );
@@ -3867,6 +3870,7 @@ mod tests {
             checks: None,
             check_meta: None,
             url: None,
+            closing_issues: Vec::new(),
         };
         let entries = vec![GithubWorkerPath {
             path: path.clone(),

@@ -991,6 +991,7 @@ mod tests {
             checks: Some(CheckState::Success),
             check_meta: None,
             url: None,
+            closing_issues: Vec::new(),
         };
         let checks = CheckSummary {
             state: CheckState::Success,

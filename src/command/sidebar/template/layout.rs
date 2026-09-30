@@ -680,6 +680,7 @@ mod tests {
             }),
             check_meta: None,
             url: None,
+            closing_issues: Vec::new(),
         }
     }
 

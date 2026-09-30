@@ -475,6 +475,7 @@ mod tests {
             checks: None,
             check_meta: None,
             url: None,
+            closing_issues: Vec::new(),
         }
     }
 

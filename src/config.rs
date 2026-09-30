@@ -240,7 +240,7 @@ pub struct DashboardConfig {
 
 /// A configurable column of the dashboard agents table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum AgentColumn {
     /// Jump key of the row, shown under the `#` header.
     Number,
@@ -253,6 +253,10 @@ pub enum AgentColumn {
     /// Pull request and check status. Rendered only while at least one agent
     /// has GitHub status to show.
     Pr,
+    /// Pull request title.
+    PrTitle,
+    /// Issues GitHub reports as closed by the pull request.
+    PrIssues,
     /// Multiplexer window index, as shown in the tmux status bar.
     Window,
     /// Agent status (icons).
@@ -277,13 +281,15 @@ pub const DEFAULT_AGENT_COLUMNS: [AgentColumn; 8] = [
 
 /// A configurable column of the dashboard worktree table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum WorktreeColumn {
     Number,
     Project,
     Worktree,
     Git,
     Pr,
+    PrTitle,
+    PrIssues,
     Mux,
     Age,
     Agent,
@@ -3896,13 +3902,15 @@ mod tests {
     #[test]
     fn agent_columns_follow_configured_order() {
         let config: Config = serde_yaml::from_str(
-            "dashboard:\n  agent_columns: [title, status, number, worktree, git, pr, window, project, time]\n",
+            "dashboard:\n  agent_columns: [title, pr_title, pr_issues, status, number, worktree, git, pr, window, project, time]\n",
         )
         .expect("config parses");
         assert_eq!(
             config.dashboard.agent_columns(),
             vec![
                 AgentColumn::Title,
+                AgentColumn::PrTitle,
+                AgentColumn::PrIssues,
                 AgentColumn::Status,
                 AgentColumn::Number,
                 AgentColumn::Worktree,
@@ -3977,13 +3985,15 @@ mod tests {
     #[test]
     fn worktree_columns_follow_configured_order() {
         let config: Config = serde_yaml::from_str(
-            "dashboard:\n  worktree_columns: [agent, mux, number, worktree, git, pr, project, age]\n",
+            "dashboard:\n  worktree_columns: [agent, pr_title, pr_issues, mux, number, worktree, git, pr, project, age]\n",
         )
         .expect("config parses");
         assert_eq!(
             config.dashboard.worktree_columns(),
             vec![
                 WorktreeColumn::Agent,
+                WorktreeColumn::PrTitle,
+                WorktreeColumn::PrIssues,
                 WorktreeColumn::Mux,
                 WorktreeColumn::Number,
                 WorktreeColumn::Worktree,

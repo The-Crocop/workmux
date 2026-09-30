@@ -162,6 +162,8 @@ struct AgentRowData {
     is_current: bool,
     git_spans: Vec<(String, Style)>,
     pr_spans: Option<Vec<(String, Style)>>,
+    pr_title: String,
+    pr_issues: String,
     window_index_label: String,
     status_spans: Vec<(String, Style)>,
     duration_line: Line<'static>,
@@ -174,6 +176,8 @@ struct AgentColumnWidths {
     worktree: u16,
     git: u16,
     pr: u16,
+    pr_title: u16,
+    pr_issues: u16,
     title: u16,
 }
 
@@ -221,6 +225,8 @@ fn agent_cell(column: AgentColumn, row: &AgentRowData, palette: &ThemePalette) -
         AgentColumn::Pr => Cell::from(format::spans_to_line(
             row.pr_spans.clone().unwrap_or_default(),
         )),
+        AgentColumn::PrTitle => Cell::from(row.pr_title.clone()),
+        AgentColumn::PrIssues => Cell::from(row.pr_issues.clone()),
         AgentColumn::Window => {
             Cell::from(row.window_index_label.clone()).style(Style::default().fg(palette.dimmed))
         }
@@ -249,6 +255,8 @@ fn build_agent_table(
             AgentColumn::Worktree => format::ResourceHeaderCell::Plain("Worktree"),
             AgentColumn::Git => format::ResourceHeaderCell::Git,
             AgentColumn::Pr => format::ResourceHeaderCell::Pr,
+            AgentColumn::PrTitle => format::ResourceHeaderCell::Plain("PR Title"),
+            AgentColumn::PrIssues => format::ResourceHeaderCell::Plain("PR Issues"),
             AgentColumn::Window => format::ResourceHeaderCell::Plain("Win"),
             AgentColumn::Status => format::ResourceHeaderCell::Plain("Status"),
             AgentColumn::Time => format::ResourceHeaderCell::Plain("Time"),
@@ -284,6 +292,10 @@ fn build_agent_table(
             AgentColumn::Worktree => Constraint::Length(widths.worktree), // auto-sized
             AgentColumn::Git => Constraint::Length(widths.git), // auto-sized
             AgentColumn::Pr => Constraint::Length(widths.pr), // auto-sized
+            AgentColumn::PrTitle if index == last_column => Constraint::Fill(1),
+            AgentColumn::PrTitle => Constraint::Length(widths.pr_title),
+            AgentColumn::PrIssues if index == last_column => Constraint::Fill(1),
+            AgentColumn::PrIssues => Constraint::Length(widths.pr_issues),
             AgentColumn::Window => Constraint::Length(4), // window index
             AgentColumn::Status => Constraint::Length(8), // fixed (icons)
             AgentColumn::Time => Constraint::Length(10),  // HH:MM:SS + padding
@@ -395,9 +407,12 @@ fn render_table(f: &mut Frame, app: &mut App, area: Rect) {
             let git_status = app.git_statuses.get(&agent.path);
             let git_spans = format_git_status(git_status, app.spinner_frame, &app.palette);
 
+            let pr = app.get_pr_for_agent(agent);
+            let pr_title = pr.map(|pr| pr.title.clone()).unwrap_or_default();
+            let pr_issues = format::format_pr_issues(pr);
+
             // Get PR status for this agent (only if column is shown)
             let pr_spans = if show_pr_column {
-                let pr = app.get_pr_for_agent(agent);
                 let checks = app.get_checks_for_agent(agent);
                 Some(format_pr_status(
                     pr,
@@ -420,6 +435,8 @@ fn render_table(f: &mut Frame, app: &mut App, area: Rect) {
                 is_current,
                 git_spans,
                 pr_spans,
+                pr_title,
+                pr_issues,
                 window_index_label: agent
                     .window_index
                     .map(|index| index.to_string())
@@ -473,6 +490,11 @@ fn render_table(f: &mut Frame, app: &mut App, area: Rect) {
         .clamp(4, 20) // Accommodate check icons + counts + inline timer
         + 1;
 
+    let pr_titles: Vec<String> = row_data.iter().map(|r| r.pr_title.clone()).collect();
+    let max_pr_title_width = format::calc_column_width(&pr_titles, 8, 60, 1);
+    let pr_issues: Vec<String> = row_data.iter().map(|r| r.pr_issues.clone()).collect();
+    let max_pr_issues_width = format::calc_column_width(&pr_issues, 9, 40, 1);
+
     // Title width, used when the title is not the trailing column and so has to
     // size to its content. Capped to leave room for the columns after it.
     let titles: Vec<String> = row_data.iter().map(|r| r.title.clone()).collect();
@@ -486,6 +508,8 @@ fn render_table(f: &mut Frame, app: &mut App, area: Rect) {
             worktree: max_worktree_width,
             git: max_git_width as u16,
             pr: max_pr_width as u16,
+            pr_title: max_pr_title_width,
+            pr_issues: max_pr_issues_width,
             title: max_title_width,
         },
         format::ResourceHeaderState {
@@ -809,6 +833,8 @@ mod tests {
             is_current: false,
             git_spans: vec![("+1".to_string(), Style::default())],
             pr_spans: Some(vec![("#7".to_string(), Style::default())]),
+            pr_title: "fix the dashboard".to_string(),
+            pr_issues: "#308 #270".to_string(),
             window_index_label: "3".to_string(),
             status_spans: vec![("work".to_string(), Style::default())],
             duration_line: format::elapsed_time_line("00:42".to_string(), Some(42), palette),
@@ -827,6 +853,8 @@ mod tests {
                 worktree: 9,
                 git: 6,
                 pr: 5,
+                pr_title: 20,
+                pr_issues: 12,
                 title: 12,
             },
             format::ResourceHeaderState {
@@ -889,6 +917,18 @@ mod tests {
         assert_eq!(
             render_line(&[AgentColumn::Worktree, AgentColumn::Title], 1),
             "wt        the title"
+        );
+    }
+
+    #[test]
+    fn agents_table_renders_opt_in_pr_metadata_without_pr_status() {
+        assert_eq!(
+            render_line(&[AgentColumn::PrTitle, AgentColumn::PrIssues], 0),
+            "PR Title             PR Issues"
+        );
+        assert_eq!(
+            render_line(&[AgentColumn::PrTitle, AgentColumn::PrIssues], 1),
+            "fix the dashboard    #308 #270"
         );
     }
 
