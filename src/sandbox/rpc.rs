@@ -26,6 +26,8 @@ use crate::sandbox::constant_time::constant_time_eq;
 pub enum RpcRequest {
     SetStatus {
         status: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        prompt: Option<String>,
     },
     SetTitle {
         title: String,
@@ -410,7 +412,9 @@ where
 fn dispatch_request(request: &RpcRequest, ctx: &RpcContext) -> RpcResponse {
     match request {
         RpcRequest::Heartbeat => RpcResponse::Ok,
-        RpcRequest::SetStatus { status } => handle_set_status(status, ctx),
+        RpcRequest::SetStatus { status, prompt } => {
+            handle_set_status(status, prompt.as_deref(), ctx)
+        }
         RpcRequest::SetTitle { title } => handle_set_title(title, ctx),
         RpcRequest::SpawnAgent {
             prompt,
@@ -435,7 +439,7 @@ fn dispatch_request(request: &RpcRequest, ctx: &RpcContext) -> RpcResponse {
 
 // ── Handlers ────────────────────────────────────────────────────────────
 
-fn handle_set_status(status: &str, ctx: &RpcContext) -> RpcResponse {
+fn handle_set_status(status: &str, prompt: Option<&str>, ctx: &RpcContext) -> RpcResponse {
     let config = &ctx.config;
 
     let (agent_status, icon, auto_clear) = match status.to_lowercase().as_str() {
@@ -492,6 +496,9 @@ fn handle_set_status(status: &str, ctx: &RpcContext) -> RpcResponse {
                     None,
                     None,
                 );
+                if let Some(prompt) = prompt {
+                    crate::state::persist_agent_prompt(&*ctx.mux, &ctx.pane_id, prompt);
+                }
             }
             crate::command::sidebar::request_refresh_for(&*ctx.mux);
             RpcResponse::Ok
@@ -1042,10 +1049,12 @@ mod tests {
     fn test_request_serialization_set_status() {
         let req = RpcRequest::SetStatus {
             status: "working".to_string(),
+            prompt: Some("fix the flaky test".to_string()),
         };
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains("\"type\":\"SetStatus\""));
         assert!(json.contains("\"status\":\"working\""));
+        assert!(json.contains("\"prompt\":\"fix the flaky test\""));
     }
 
     #[test]
