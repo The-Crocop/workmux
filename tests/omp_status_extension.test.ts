@@ -33,7 +33,7 @@ describe('omp workmux status extension', () => {
 
     await harness.handlers.get('before_agent_start')?.(
       { prompt: 'fix this please' },
-      {},
+      { agent: { kind: 'main' } },
     );
 
     expect(harness.calls).toContainEqual([
@@ -42,6 +42,19 @@ describe('omp workmux status extension', () => {
       '--prompt',
       'fix this please',
     ]);
+  });
+
+  test('does not report subagent prompts', async () => {
+    const harness = createHarness();
+
+    await harness.handlers.get('before_agent_start')?.(
+      { prompt: 'internal delegated task' },
+      { agent: { kind: 'sub' } },
+    );
+
+    expect(
+      harness.calls.some((args) => args.includes('internal delegated task')),
+    ).toBe(false);
   });
 
   test('does not report waiting between an assistant tool call and execution', async () => {
