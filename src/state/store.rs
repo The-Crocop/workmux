@@ -1748,10 +1748,26 @@ mod tests {
         let state = test_agent_state(key.clone());
 
         store.upsert_agent(&state).unwrap();
+        store.set_agent_prompt(&key, "fix the flaky test").unwrap();
         assert!(store.get_agent(&key).unwrap().is_some());
+        assert_eq!(
+            store
+                .load_agent_prompts(&key.backend, &key.instance)
+                .unwrap()
+                .get(&key.pane_id)
+                .map(String::as_str),
+            Some("fix the flaky test")
+        );
 
         store.delete_agent(&key).unwrap();
         assert!(store.get_agent(&key).unwrap().is_none());
+        assert!(
+            store
+                .load_agent_prompts(&key.backend, &key.instance)
+                .unwrap()
+                .get(&key.pane_id)
+                .is_none()
+        );
     }
 
     #[test]
