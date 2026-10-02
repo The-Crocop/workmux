@@ -20,28 +20,7 @@ export const WorkmuxStatusPlugin: Plugin = async ({ $ }) => {
   let statusQueue = Promise.resolve();
 
   function writeStatus(status: string) {
-    return import type { Plugin } from '@opencode-ai/plugin';
-
-export const WorkmuxStatusPlugin: Plugin = async ({ $ }) => {
-  try {
-    await $`workmux register-agent`.quiet();
-  } catch {
-    // Status tracking remains available when registration cannot reach workmux.
-  }
-
-  // OpenCode can emit repeated `session.status busy` events for a single turn,
-  // and can even emit a stale trailing `busy` after `idle` at the end. Track
-  // every parent and child session so one idle session cannot mark the whole
-  // pane done while another session is still working.
-  const statusBySession = new Map<string, string>();
-  const acceptBusyBySession = new Map<string, boolean>();
-  const deletedSessions = new Set<string>();
-  const currentUserMessageBySession = new Map<string, string>();
-  const promptPartsByMessage = new Map<string, Map<string, string>>();
-  let reportedStatus: string | undefined;
-  let statusQueue = Promise.resolve();
-
-workmux set-window-status ${status}`.quiet().then(() => {}, () => {});
+    return $`workmux set-window-status ${status}`.quiet().then(() => {}, () => {});
   }
 
   function normalizePrompt(text: string) {
@@ -49,28 +28,7 @@ workmux set-window-status ${status}`.quiet().then(() => {}, () => {});
   }
 
   function writePrompt(prompt: string) {
-    return import type { Plugin } from '@opencode-ai/plugin';
-
-export const WorkmuxStatusPlugin: Plugin = async ({ $ }) => {
-  try {
-    await $`workmux register-agent`.quiet();
-  } catch {
-    // Status tracking remains available when registration cannot reach workmux.
-  }
-
-  // OpenCode can emit repeated `session.status busy` events for a single turn,
-  // and can even emit a stale trailing `busy` after `idle` at the end. Track
-  // every parent and child session so one idle session cannot mark the whole
-  // pane done while another session is still working.
-  const statusBySession = new Map<string, string>();
-  const acceptBusyBySession = new Map<string, boolean>();
-  const deletedSessions = new Set<string>();
-  const currentUserMessageBySession = new Map<string, string>();
-  const promptPartsByMessage = new Map<string, Map<string, string>>();
-  let reportedStatus: string | undefined;
-  let statusQueue = Promise.resolve();
-
-workmux set-window-status working --prompt ${prompt}`
+    return $`workmux set-window-status working --prompt ${prompt}`
       .quiet()
       .then(() => {}, () => {});
   }
