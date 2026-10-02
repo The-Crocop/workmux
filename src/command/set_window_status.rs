@@ -228,7 +228,13 @@ fn apply_status_update(
                 None,
                 agent_session_id.map(str::to_string),
             );
-            if let Some(prompt) = prompt {
+            if status == AgentStatus::Working
+                && config
+                    .dashboard
+                    .agent_columns()
+                    .contains(&crate::config::AgentColumn::Prompt)
+                && let Some(prompt) = prompt
+            {
                 crate::state::persist_agent_prompt(mux, pane_id, prompt);
             }
         }
