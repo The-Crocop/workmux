@@ -118,7 +118,7 @@ describe('pi workmux status extension', () => {
 
     await harness.handlers.get('before_agent_start')?.(
       { prompt: 'fix this please' },
-      {},
+      { agent: { kind: 'main' } },
     );
 
     expect(harness.calls).toContainEqual([
@@ -127,6 +127,19 @@ describe('pi workmux status extension', () => {
       '--prompt',
       'fix this please',
     ]);
+  });
+
+  test('does not report subagent prompts', async () => {
+    const harness = await createHarness();
+
+    await harness.handlers.get('before_agent_start')?.(
+      { prompt: 'internal delegated task' },
+      { agent: { kind: 'sub' } },
+    );
+
+    expect(
+      harness.calls.some((args) => args.includes('internal delegated task')),
+    ).toBe(false);
   });
 
   test('reports done only after the full agent run settles', async () => {
