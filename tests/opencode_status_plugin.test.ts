@@ -236,6 +236,18 @@ describe('WorkmuxStatusPlugin', () => {
     );
   });
 
+  test('ignores late prompt parts after the session is done', async () => {
+    const harness = await createHarness();
+
+    await harness.emit(userMessage('parent', 'msg-late'));
+    await harness.emit(sessionStatus('parent', 'idle'));
+    await harness.emit(userTextPart('parent', 'msg-late', 'late text'));
+
+    expect(
+      harness.commands.some((command) => command.includes('--prompt late text')),
+    ).toBe(false);
+  });
+
   test('does not report subagent user messages as the user prompt', async () => {
     const harness = await createHarness();
 
