@@ -666,17 +666,20 @@ mod tests {
     #[test]
     fn parses_hook_identity_and_transcript() {
         let hook = parse_hook_input(
-            r#"{"session_id":"session-1","transcript_path":"/repo/session-1.jsonl"}"#,
+            r#"{"session_id":"session-1","transcript_path":"/repo/session-1.jsonl","prompt":"fix the flaky test"}"#,
         )
         .unwrap();
         assert_eq!(hook.session_id(), Some("session-1"));
+        assert_eq!(hook.prompt(), Some("fix the flaky test"));
         assert_eq!(
             hook.transcript_path(),
             Some(Path::new("/repo/session-1.jsonl"))
         );
 
-        let empty = parse_hook_input(r#"{"session_id":"","transcript_path":""}"#).unwrap();
+        let empty =
+            parse_hook_input(r#"{"session_id":"","transcript_path":"","prompt":""}"#).unwrap();
         assert_eq!(empty.session_id(), None);
+        assert_eq!(empty.prompt(), None);
         assert_eq!(empty.transcript_path(), None);
         assert!(parse_hook_input("not json").is_none());
     }
