@@ -775,7 +775,7 @@ enum Commands {
         #[arg(value_enum)]
         command: command::set_window_status::SetWindowStatusCommand,
         /// Latest user prompt to expose in the dashboard.
-        #[arg(long)]
+        #[arg(long, allow_hyphen_values = true)]
         prompt: Option<String>,
     },
 
