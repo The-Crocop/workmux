@@ -51,6 +51,37 @@ pub fn persist_agent_registration(
     agent_session_id: Option<String>,
 ) {
     persist_agent_snapshot(mux, pane_id, None, None, agent_session_id, false);
+    clear_agent_prompt(mux, pane_id);
+}
+
+/// Persist the latest user prompt for an agent pane.
+pub fn persist_agent_prompt(mux: &dyn Multiplexer, pane_id: &str, prompt: &str) {
+    let Ok(store) = StateStore::new() else {
+        return;
+    };
+    let pane_key = PaneKey {
+        backend: mux.name().to_string(),
+        instance: mux.instance_id(),
+        pane_id: pane_id.to_string(),
+    };
+    if let Err(error) = store.set_agent_prompt(&pane_key, prompt) {
+        warn!(%error, "failed to persist agent prompt");
+    }
+}
+
+/// Clear the persisted prompt for an agent pane.
+pub fn clear_agent_prompt(mux: &dyn Multiplexer, pane_id: &str) {
+    let Ok(store) = StateStore::new() else {
+        return;
+    };
+    let pane_key = PaneKey {
+        backend: mux.name().to_string(),
+        instance: mux.instance_id(),
+        pane_id: pane_id.to_string(),
+    };
+    if let Err(error) = store.clear_agent_prompt(&pane_key) {
+        warn!(%error, "failed to clear agent prompt");
+    }
 }
 
 /// Clear an agent's persisted status without deleting its state record.
