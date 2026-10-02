@@ -231,6 +231,19 @@ describe('WorkmuxStatusPlugin', () => {
     );
   });
 
+  test('marks truncated prompts with an ellipsis', async () => {
+    const harness = await createHarness();
+
+    await harness.emit(userMessage('parent', 'msg-long'));
+    await harness.emit(userTextPart('parent', 'msg-long', 'x'.repeat(501)));
+
+    const command = harness.commands.find((entry) => entry.includes('--prompt '));
+    expect(command).toBeDefined();
+    const prompt = command?.split('--prompt ')[1] ?? '';
+    expect(prompt.length).toBe(500);
+    expect(prompt.endsWith('…')).toBe(true);
+  });
+
   test('does not report assistant text as a user prompt', async () => {
     const harness = await createHarness();
 
