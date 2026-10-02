@@ -73,6 +73,7 @@ async function createHarness(
     statuses,
     events,
     listeners,
+    handlers,
     stopPublisher() { stopPublisher?.(); },
     async flush() {
       while (pending.size) await Promise.all([...pending]);
@@ -110,6 +111,22 @@ describe('pi workmux status extension', () => {
     expect(harness.calls).toEqual([['register-agent']]);
     await harness.emit('session_shutdown');
     expect(harness.statuses).toEqual([]);
+  });
+
+  test('reports the latest user prompt before the agent starts', async () => {
+    const harness = await createHarness();
+
+    await harness.handlers.get('before_agent_start')?.(
+      { prompt: 'fix this please' },
+      {},
+    );
+
+    expect(harness.calls).toContainEqual([
+      'set-window-status',
+      'working',
+      '--prompt',
+      'fix this please',
+    ]);
   });
 
   test('reports done only after the full agent run settles', async () => {
