@@ -77,8 +77,8 @@ export default function (pi: ExtensionAPI) {
     await writes;
   });
 
-  pi.on("before_agent_start", async (event) => {
-    if (!sessionActive || !event.prompt.trim()) return;
+  pi.on("before_agent_start", async (event, ctx) => {
+    if (ctx.agent.kind === "sub" || !sessionActive || !event.prompt.trim()) return;
     try {
       await pi.exec("workmux", [
         "set-window-status",
