@@ -83,13 +83,17 @@ pub fn run(cmd: SetWindowStatusCommand, prompt: Option<String>) -> Result<()> {
         return Ok(());
     }
 
+    let hook = read_hook_input();
+    let prompt = prompt
+        .as_deref()
+        .or_else(|| hook.as_ref().and_then(HookInput::prompt));
+
     // Inside a sandbox guest, route through RPC to the host supervisor
     if crate::sandbox::guest::is_sandbox_guest() {
-        return run_via_rpc(cmd, prompt.as_deref());
+        return run_via_rpc(cmd, prompt);
     }
 
     let config = Config::load(None)?;
-    let hook = read_hook_input();
     run_for_status_target(hook.as_ref(), |mux, pane_id| {
         apply_status_update(
             &cmd,
@@ -97,7 +101,7 @@ pub fn run(cmd: SetWindowStatusCommand, prompt: Option<String>) -> Result<()> {
             mux,
             pane_id,
             hook.as_ref().and_then(HookInput::session_id),
-            prompt.as_deref(),
+            prompt,
         )
     })
 }
@@ -283,11 +287,16 @@ fn status_backend_candidates_for(
 struct HookInput {
     session_id: Option<String>,
     transcript_path: Option<String>,
+    prompt: Option<String>,
 }
 
 impl HookInput {
     fn session_id(&self) -> Option<&str> {
         self.session_id.as_deref().filter(|value| !value.is_empty())
+    }
+
+    fn prompt(&self) -> Option<&str> {
+        self.prompt.as_deref().filter(|value| !value.trim().is_empty())
     }
 
     fn transcript_path(&self) -> Option<&Path> {
