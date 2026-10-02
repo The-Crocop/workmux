@@ -774,6 +774,9 @@ enum Commands {
     SetWindowStatus {
         #[arg(value_enum)]
         command: command::set_window_status::SetWindowStatusCommand,
+        /// Latest user prompt to expose in the dashboard.
+        #[arg(long)]
+        prompt: Option<String>,
     },
 
     /// Register the agent in the current multiplexer pane (used by hooks)
@@ -1297,7 +1300,9 @@ pub fn run() -> Result<()> {
             ClaudeCommands::Prune => prune_claude_config(),
         },
         Commands::Sandbox(args) => command::sandbox::run(args),
-        Commands::SetWindowStatus { command } => command::set_window_status::run(command),
+        Commands::SetWindowStatus { command, prompt } => {
+            command::set_window_status::run(command, prompt)
+        }
         Commands::RegisterAgent => command::set_window_status::register_agent(),
         Commands::SetBase { base } => command::set_base::run(&base),
         Commands::LastDone => command::last_done::run(),
