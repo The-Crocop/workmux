@@ -23,13 +23,6 @@ export const WorkmuxStatusPlugin: Plugin = async ({ $ }) => {
     return $`workmux set-window-status ${status}`.quiet().then(() => {}, () => {});
   }
 
-  function normalizePrompt(text: string) {
-    const normalized = text.replace(/\s+/g, ' ').trim();
-    return normalized.length > 500
-      ? `${normalized.slice(0, 499)}…`
-      : normalized;
-  }
-
   function writePrompt(prompt: string) {
     return $`workmux set-window-status working --prompt ${prompt}`
       .quiet()
@@ -118,7 +111,7 @@ export const WorkmuxStatusPlugin: Plugin = async ({ $ }) => {
           const parts = promptPartsByMessage.get(part.messageID) ?? new Map<string, string>();
           parts.set(part.id, part.text);
           promptPartsByMessage.set(part.messageID, parts);
-          const prompt = normalizePrompt([...parts.values()].join('\n'));
+          const prompt = [...parts.values()].join('\n').trim();
           if (prompt) {
             await writePrompt(prompt);
           }
