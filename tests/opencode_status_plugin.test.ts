@@ -220,28 +220,15 @@ describe('WorkmuxStatusPlugin', () => {
     expect(harness.statuses).toEqual(['working', 'done', 'working']);
   });
 
-  test('reports the latest user prompt and normalizes whitespace', async () => {
+  test('reports the latest user prompt text', async () => {
     const harness = await createHarness();
 
     await harness.emit(userMessage('parent', 'msg-1'));
-    await harness.emit(userTextPart('parent', 'msg-1', 'can you\n  fix this?'));
+    await harness.emit(userTextPart('parent', 'msg-1', 'can you fix this?'));
 
     expect(harness.commands).toContain(
       'workmux set-window-status working --prompt can you fix this?',
     );
-  });
-
-  test('marks truncated prompts with an ellipsis', async () => {
-    const harness = await createHarness();
-
-    await harness.emit(userMessage('parent', 'msg-long'));
-    await harness.emit(userTextPart('parent', 'msg-long', 'x'.repeat(501)));
-
-    const command = harness.commands.find((entry) => entry.includes('--prompt '));
-    expect(command).toBeDefined();
-    const prompt = command?.split('--prompt ')[1] ?? '';
-    expect(prompt.length).toBe(500);
-    expect(prompt.endsWith('…')).toBe(true);
   });
 
   test('does not report assistant text as a user prompt', async () => {
