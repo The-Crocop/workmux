@@ -95,6 +95,10 @@ export const WorkmuxStatusPlugin: Plugin = async ({ $ }) => {
       if (event.type === 'message.updated' && event.properties.info.role === 'user') {
         const info = event.properties.info;
         acceptBusyBySession.set(info.sessionID, true);
+        const previousMessageID = currentUserMessageBySession.get(info.sessionID);
+        if (previousMessageID && previousMessageID !== info.id) {
+          promptPartsByMessage.delete(previousMessageID);
+        }
         currentUserMessageBySession.set(info.sessionID, info.id);
         promptPartsByMessage.set(info.id, new Map());
         await setStatus(info.sessionID, 'working');
