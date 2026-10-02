@@ -64,9 +64,21 @@ pub fn persist_agent_prompt(mux: &dyn Multiplexer, pane_id: &str, prompt: &str) 
         instance: mux.instance_id(),
         pane_id: pane_id.to_string(),
     };
-    if let Err(error) = store.set_agent_prompt(&pane_key, prompt) {
+    let prompt = normalize_agent_prompt(prompt);
+    if prompt.is_empty() {
+        return;
+    }
+    if let Err(error) = store.set_agent_prompt(&pane_key, &prompt) {
         warn!(%error, "failed to persist agent prompt");
     }
+}
+
+fn normalize_agent_prompt(prompt: &str) -> String {
+    let normalized = prompt.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.chars().count() <= 500 {
+        return normalized;
+    }
+    normalized.chars().take(499).collect::<String>() + "…"
 }
 
 /// Clear the persisted prompt for an agent pane.
@@ -323,6 +335,15 @@ fn merge_agent_kind(new: Option<String>, existing: Option<String>) -> Option<Str
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn agent_prompt_normalizes_whitespace_and_marks_truncation() {
+        assert_eq!(normalize_agent_prompt("  hello\n  world  "), "hello world");
+        let long = "x".repeat(501);
+        let normalized = normalize_agent_prompt(&long);
+        assert_eq!(normalized.chars().count(), 500);
+        assert!(normalized.ends_with('…'));
+    }
 
     #[test]
     fn registration_starts_activity_without_status() {
