@@ -77,6 +77,20 @@ export default function (pi: ExtensionAPI) {
     await writes;
   });
 
+  pi.on("before_agent_start", async (event) => {
+    if (!sessionActive || !event.prompt.trim()) return;
+    try {
+      await pi.exec("workmux", [
+        "set-window-status",
+        "working",
+        "--prompt",
+        event.prompt,
+      ]);
+    } catch {
+      // Prompt reporting is best-effort, like status reporting.
+    }
+  });
+
   pi.on("agent_start", async () => {
     if (!sessionActive) return;
     parentWorking = true;
