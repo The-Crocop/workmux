@@ -399,6 +399,68 @@ impl StateStore {
         self.base_path.join("agents")
     }
 
+    /// Path to persisted last-prompt sidecars.
+    fn prompts_dir(&self) -> PathBuf {
+        self.base_path.join("agent-prompts")
+    }
+
+    fn prompt_path(&self, pane_key: &PaneKey) -> PathBuf {
+        let mut filename = PathBuf::from(pane_key.to_filename());
+        filename.set_extension("txt");
+        self.prompts_dir().join(filename)
+    }
+
+    /// Persist the latest user prompt for an agent pane.
+    pub fn set_agent_prompt(&self, pane_key: &PaneKey, prompt: &str) -> Result<()> {
+        let dir = self.prompts_dir();
+        fs::create_dir_all(&dir).context("Failed to create agent prompts directory")?;
+        write_atomic(&self.prompt_path(pane_key), prompt.as_bytes())
+            .context("Failed to write agent prompt")
+    }
+
+    /// Remove any persisted prompt for an agent pane.
+    pub fn clear_agent_prompt(&self, pane_key: &PaneKey) -> Result<()> {
+        match fs::remove_file(self.prompt_path(pane_key)) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error).context("Failed to remove agent prompt"),
+        }
+    }
+
+    /// Load latest prompts for one multiplexer instance, keyed by pane ID.
+    pub fn load_agent_prompts(
+        &self,
+        backend: &str,
+        instance: &str,
+    ) -> Result<HashMap<String, String>> {
+        let dir = self.prompts_dir();
+        if !dir.exists() {
+            return Ok(HashMap::new());
+        }
+
+        let mut prompts = HashMap::new();
+        for entry in fs::read_dir(dir)? {
+            let path = entry?.path();
+            if path.extension().and_then(|ext| ext.to_str()) != Some("txt") {
+                continue;
+            }
+            let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
+                continue;
+            };
+            let json_name = format!("{stem}.json");
+            let Some(key) = PaneKey::from_filename(&json_name) else {
+                continue;
+            };
+            if key.backend != backend || key.instance != instance {
+                continue;
+            }
+            if let Ok(prompt) = fs::read_to_string(&path) {
+                prompts.insert(key.pane_id, prompt);
+            }
+        }
+        Ok(prompts)
+    }
+
     /// Path to containers directory.
     fn containers_dir(&self) -> PathBuf {
         self.base_path.join("containers")
