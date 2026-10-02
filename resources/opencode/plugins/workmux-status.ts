@@ -14,6 +14,7 @@ export const WorkmuxStatusPlugin: Plugin = async ({ $ }) => {
   const statusBySession = new Map<string, string>();
   const acceptBusyBySession = new Map<string, boolean>();
   const deletedSessions = new Set<string>();
+  const childSessions = new Set<string>();
   const currentUserMessageBySession = new Map<string, string>();
   const promptPartsByMessage = new Map<string, Map<string, string>>();
   let reportedStatus: string | undefined;
@@ -88,15 +89,26 @@ export const WorkmuxStatusPlugin: Plugin = async ({ $ }) => {
 
   return {
     event: async ({ event }) => {
+      if (event.type === 'session.created' || event.type === 'session.updated') {
+        const info = event.properties.info;
+        if (info.parentID) {
+          childSessions.add(info.id);
+        } else {
+          childSessions.delete(info.id);
+        }
+      }
+
       if (event.type === 'message.updated' && event.properties.info.role === 'user') {
         const info = event.properties.info;
         acceptBusyBySession.set(info.sessionID, true);
-        const previousMessageID = currentUserMessageBySession.get(info.sessionID);
-        if (previousMessageID && previousMessageID !== info.id) {
-          promptPartsByMessage.delete(previousMessageID);
+        if (!childSessions.has(info.sessionID)) {
+          const previousMessageID = currentUserMessageBySession.get(info.sessionID);
+          if (previousMessageID && previousMessageID !== info.id) {
+            promptPartsByMessage.delete(previousMessageID);
+          }
+          currentUserMessageBySession.set(info.sessionID, info.id);
+          promptPartsByMessage.set(info.id, new Map());
         }
-        currentUserMessageBySession.set(info.sessionID, info.id);
-        promptPartsByMessage.set(info.id, new Map());
         await setStatus(info.sessionID, 'working');
       }
 
@@ -141,6 +153,7 @@ export const WorkmuxStatusPlugin: Plugin = async ({ $ }) => {
         case 'session.deleted': {
           const sessionID = event.properties.info.id;
           deletedSessions.add(sessionID);
+          childSessions.delete(sessionID);
           acceptBusyBySession.delete(sessionID);
           const messageID = currentUserMessageBySession.get(sessionID);
           currentUserMessageBySession.delete(sessionID);
