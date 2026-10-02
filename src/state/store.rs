@@ -687,9 +687,15 @@ impl StateStore {
     fn delete_agent_locked(&self, key: &PaneKey) -> Result<()> {
         let path = self.agent_path(key);
         match fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e).context("Failed to delete agent state"),
+        }
+
+        match fs::remove_file(self.prompt_path(key)) {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(e).context("Failed to delete agent state"),
+            Err(e) => Err(e).context("Failed to delete agent prompt"),
         }
     }
 
