@@ -294,6 +294,10 @@ struct HookInput {
     session_id: Option<String>,
     transcript_path: Option<String>,
     prompt: Option<String>,
+    agent_id: Option<String>,
+    agent_type: Option<String>,
+    #[serde(alias = "subagentType")]
+    subagent_type: Option<String>,
 }
 
 impl HookInput {
@@ -302,6 +306,15 @@ impl HookInput {
     }
 
     fn prompt(&self) -> Option<&str> {
+        if self.agent_id.as_deref().is_some_and(|value| !value.is_empty())
+            || self.agent_type.as_deref().is_some_and(|value| !value.is_empty())
+            || self
+                .subagent_type
+                .as_deref()
+                .is_some_and(|value| !value.is_empty())
+        {
+            return None;
+        }
         self.prompt.as_deref().filter(|value| !value.trim().is_empty())
     }
 
@@ -687,6 +700,16 @@ mod tests {
         assert_eq!(empty.session_id(), None);
         assert_eq!(empty.prompt(), None);
         assert_eq!(empty.transcript_path(), None);
+        let subagent = parse_hook_input(
+            r#"{"prompt":"internal delegated task","agent_id":"agent-1","agent_type":"Explore"}"#,
+        )
+        .unwrap();
+        assert_eq!(subagent.prompt(), None);
+
+        let grok_subagent =
+            parse_hook_input(r#"{"prompt":"internal task","subagentType":"explore"}"#).unwrap();
+        assert_eq!(grok_subagent.prompt(), None);
+
         assert!(parse_hook_input("not json").is_none());
     }
 
