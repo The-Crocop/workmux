@@ -24,7 +24,10 @@ export const WorkmuxStatusPlugin: Plugin = async ({ $ }) => {
   }
 
   function normalizePrompt(text: string) {
-    return text.replace(/\s+/g, ' ').trim().slice(0, 500);
+    const normalized = text.replace(/\s+/g, ' ').trim();
+    return normalized.length > 500
+      ? `${normalized.slice(0, 499)}…`
+      : normalized;
   }
 
   function writePrompt(prompt: string) {
