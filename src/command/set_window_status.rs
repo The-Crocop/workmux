@@ -78,14 +78,14 @@ impl StatusTarget {
     }
 }
 
-pub fn run(cmd: SetWindowStatusCommand) -> Result<()> {
+pub fn run(cmd: SetWindowStatusCommand, prompt: Option<String>) -> Result<()> {
     if status_tracking_disabled() {
         return Ok(());
     }
 
     // Inside a sandbox guest, route through RPC to the host supervisor
     if crate::sandbox::guest::is_sandbox_guest() {
-        return run_via_rpc(cmd);
+        return run_via_rpc(cmd, prompt.as_deref());
     }
 
     let config = Config::load(None)?;
@@ -97,6 +97,7 @@ pub fn run(cmd: SetWindowStatusCommand) -> Result<()> {
             mux,
             pane_id,
             hook.as_ref().and_then(HookInput::session_id),
+            prompt.as_deref(),
         )
     })
 }
@@ -184,6 +185,7 @@ fn apply_status_update(
     mux: &dyn Multiplexer,
     pane_id: &str,
     agent_session_id: Option<&str>,
+    prompt: Option<&str>,
 ) -> Result<()> {
     match cmd {
         SetWindowStatusCommand::Clear => {
@@ -222,6 +224,9 @@ fn apply_status_update(
                 None,
                 agent_session_id.map(str::to_string),
             );
+            if let Some(prompt) = prompt {
+                crate::state::persist_agent_prompt(mux, pane_id, prompt);
+            }
         }
     }
 
@@ -524,10 +529,10 @@ fn select_pane_for_agent_session(
 }
 
 fn register_via_rpc() -> Result<()> {
-    run_status_via_rpc("register")
+    run_status_via_rpc("register", None)
 }
 
-fn run_via_rpc(cmd: SetWindowStatusCommand) -> Result<()> {
+fn run_via_rpc(cmd: SetWindowStatusCommand, prompt: Option<&str>) -> Result<()> {
     let status = match cmd {
         SetWindowStatusCommand::Working => "working",
         SetWindowStatusCommand::Waiting => "waiting",
@@ -535,15 +540,16 @@ fn run_via_rpc(cmd: SetWindowStatusCommand) -> Result<()> {
         SetWindowStatusCommand::Clear => "clear",
     };
 
-    run_status_via_rpc(status)
+    run_status_via_rpc(status, prompt)
 }
 
-fn run_status_via_rpc(status: &str) -> Result<()> {
+fn run_status_via_rpc(status: &str, prompt: Option<&str>) -> Result<()> {
     use crate::sandbox::rpc::{RpcClient, RpcRequest, RpcResponse};
 
     let mut client = RpcClient::from_env()?;
     let response = client.call(&RpcRequest::SetStatus {
         status: status.to_string(),
+        prompt: prompt.map(str::to_string),
     })?;
 
     match response {
