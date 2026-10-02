@@ -38,6 +38,14 @@ export const WorkmuxStatusPlugin: Plugin = async ({ $ }) => {
     return statusQueue;
   }
 
+  function queuePrompt(prompt: string) {
+    statusQueue = statusQueue.then(
+      () => writePrompt(prompt),
+      () => writePrompt(prompt),
+    );
+    return statusQueue;
+  }
+
   async function reportAggregateStatus() {
     const statuses = [...statusBySession.values()];
     let status = 'done';
@@ -118,6 +126,7 @@ export const WorkmuxStatusPlugin: Plugin = async ({ $ }) => {
           part.type === 'text' &&
           !part.synthetic &&
           !part.ignored &&
+          acceptBusyBySession.get(part.sessionID) !== false &&
           currentUserMessageBySession.get(part.sessionID) === part.messageID
         ) {
           const parts = promptPartsByMessage.get(part.messageID) ?? new Map<string, string>();
@@ -125,7 +134,7 @@ export const WorkmuxStatusPlugin: Plugin = async ({ $ }) => {
           promptPartsByMessage.set(part.messageID, parts);
           const prompt = [...parts.values()].join('\n').trim();
           if (prompt) {
-            await writePrompt(prompt);
+            await queuePrompt(prompt);
           }
         }
       }
