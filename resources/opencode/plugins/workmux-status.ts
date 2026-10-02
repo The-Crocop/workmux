@@ -14,11 +14,65 @@ export const WorkmuxStatusPlugin: Plugin = async ({ $ }) => {
   const statusBySession = new Map<string, string>();
   const acceptBusyBySession = new Map<string, boolean>();
   const deletedSessions = new Set<string>();
+  const currentUserMessageBySession = new Map<string, string>();
+  const promptPartsByMessage = new Map<string, Map<string, string>>();
   let reportedStatus: string | undefined;
   let statusQueue = Promise.resolve();
 
   function writeStatus(status: string) {
-    return $`workmux set-window-status ${status}`.quiet().then(() => {}, () => {});
+    return import type { Plugin } from '@opencode-ai/plugin';
+
+export const WorkmuxStatusPlugin: Plugin = async ({ $ }) => {
+  try {
+    await $`workmux register-agent`.quiet();
+  } catch {
+    // Status tracking remains available when registration cannot reach workmux.
+  }
+
+  // OpenCode can emit repeated `session.status busy` events for a single turn,
+  // and can even emit a stale trailing `busy` after `idle` at the end. Track
+  // every parent and child session so one idle session cannot mark the whole
+  // pane done while another session is still working.
+  const statusBySession = new Map<string, string>();
+  const acceptBusyBySession = new Map<string, boolean>();
+  const deletedSessions = new Set<string>();
+  const currentUserMessageBySession = new Map<string, string>();
+  const promptPartsByMessage = new Map<string, Map<string, string>>();
+  let reportedStatus: string | undefined;
+  let statusQueue = Promise.resolve();
+
+workmux set-window-status ${status}`.quiet().then(() => {}, () => {});
+  }
+
+  function normalizePrompt(text: string) {
+    return text.replace(/\s+/g, ' ').trim().slice(0, 500);
+  }
+
+  function writePrompt(prompt: string) {
+    return import type { Plugin } from '@opencode-ai/plugin';
+
+export const WorkmuxStatusPlugin: Plugin = async ({ $ }) => {
+  try {
+    await $`workmux register-agent`.quiet();
+  } catch {
+    // Status tracking remains available when registration cannot reach workmux.
+  }
+
+  // OpenCode can emit repeated `session.status busy` events for a single turn,
+  // and can even emit a stale trailing `busy` after `idle` at the end. Track
+  // every parent and child session so one idle session cannot mark the whole
+  // pane done while another session is still working.
+  const statusBySession = new Map<string, string>();
+  const acceptBusyBySession = new Map<string, boolean>();
+  const deletedSessions = new Set<string>();
+  const currentUserMessageBySession = new Map<string, string>();
+  const promptPartsByMessage = new Map<string, Map<string, string>>();
+  let reportedStatus: string | undefined;
+  let statusQueue = Promise.resolve();
+
+workmux set-window-status working --prompt ${prompt}`
+      .quiet()
+      .then(() => {}, () => {});
   }
 
   function queueStatus(status: string) {
@@ -81,7 +135,29 @@ export const WorkmuxStatusPlugin: Plugin = async ({ $ }) => {
   return {
     event: async ({ event }) => {
       if (event.type === 'message.updated' && event.properties.info.role === 'user') {
-        acceptBusyBySession.set(event.properties.sessionID, true);
+        const info = event.properties.info;
+        acceptBusyBySession.set(info.sessionID, true);
+        currentUserMessageBySession.set(info.sessionID, info.id);
+        promptPartsByMessage.set(info.id, new Map());
+        await setStatus(info.sessionID, 'working');
+      }
+
+      if (event.type === 'message.part.updated') {
+        const part = event.properties.part;
+        if (
+          part.type === 'text' &&
+          !part.synthetic &&
+          !part.ignored &&
+          currentUserMessageBySession.get(part.sessionID) === part.messageID
+        ) {
+          const parts = promptPartsByMessage.get(part.messageID) ?? new Map<string, string>();
+          parts.set(part.id, part.text);
+          promptPartsByMessage.set(part.messageID, parts);
+          const prompt = normalizePrompt([...parts.values()].join('\n'));
+          if (prompt) {
+            await writePrompt(prompt);
+          }
+        }
       }
 
       switch (event.type) {
@@ -108,6 +184,11 @@ export const WorkmuxStatusPlugin: Plugin = async ({ $ }) => {
           const sessionID = event.properties.info.id;
           deletedSessions.add(sessionID);
           acceptBusyBySession.delete(sessionID);
+          const messageID = currentUserMessageBySession.get(sessionID);
+          currentUserMessageBySession.delete(sessionID);
+          if (messageID) {
+            promptPartsByMessage.delete(messageID);
+          }
           if (statusBySession.delete(sessionID)) {
             await reportAggregateStatus();
           }
