@@ -42,6 +42,8 @@ pub struct App {
     /// The multiplexer backend
     pub mux: Arc<dyn Multiplexer>,
     pub agents: Vec<AgentPane>,
+    /// Latest user prompt for each pane, keyed by pane ID.
+    pub agent_prompts: HashMap<String, String>,
     /// Full agent list before name/stale filtering (populated by refresh())
     all_agents: Vec<AgentPane>,
     pub table_state: TableState,
@@ -226,6 +228,7 @@ impl App {
             terminal_area: Rect::default(),
             mux,
             agents: Vec::new(),
+            agent_prompts: HashMap::new(),
             all_agents: Vec::new(),
             table_state: TableState::default(),
             selected_pane_id: None,
@@ -320,6 +323,11 @@ impl App {
         // Load agents from StateStore with reconciliation against live pane state
         self.all_agents = StateStore::new()
             .and_then(|store| store.load_reconciled_agents(self.mux.as_ref()))
+            .unwrap_or_default();
+        self.agent_prompts = StateStore::open_read_only()
+            .and_then(|store| {
+                store.load_agent_prompts(self.mux.name(), &self.mux.instance_id())
+            })
             .unwrap_or_default();
 
         // Load interrupted pane IDs from daemon runtime state
