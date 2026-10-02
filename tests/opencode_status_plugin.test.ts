@@ -46,6 +46,11 @@ const userMessage = (sessionID: string, messageID = 'user-message') => ({
   properties: { info: { id: messageID, role: 'user', sessionID } },
 });
 
+const sessionCreated = (sessionID: string, parentID?: string) => ({
+  type: 'session.created',
+  properties: { info: { id: sessionID, parentID } },
+});
+
 const userTextPart = (sessionID: string, messageID: string, text: string) => ({
   type: 'message.part.updated',
   properties: {
@@ -229,6 +234,18 @@ describe('WorkmuxStatusPlugin', () => {
     expect(harness.commands).toContain(
       'workmux set-window-status working --prompt can you fix this?',
     );
+  });
+
+  test('does not report subagent user messages as the user prompt', async () => {
+    const harness = await createHarness();
+
+    await harness.emit(sessionCreated('child', 'parent'));
+    await harness.emit(userMessage('child', 'child-msg'));
+    await harness.emit(userTextPart('child', 'child-msg', 'internal delegated task'));
+
+    expect(
+      harness.commands.some((command) => command.includes('--prompt internal delegated task')),
+    ).toBe(false);
   });
 
   test('does not report assistant text as a user prompt', async () => {
