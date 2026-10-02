@@ -496,7 +496,14 @@ fn handle_set_status(status: &str, prompt: Option<&str>, ctx: &RpcContext) -> Rp
                     None,
                     None,
                 );
-                if let Some(prompt) = prompt {
+                if agent_status == AgentStatus::Working
+                    && ctx
+                        .config
+                        .dashboard
+                        .agent_columns()
+                        .contains(&crate::config::AgentColumn::Prompt)
+                    && let Some(prompt) = prompt
+                {
                     crate::state::persist_agent_prompt(&*ctx.mux, &ctx.pane_id, prompt);
                 }
             }
