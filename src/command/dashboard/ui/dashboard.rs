@@ -168,6 +168,7 @@ struct AgentRowData {
     status_spans: Vec<(String, Style)>,
     duration_line: Line<'static>,
     title: String,
+    prompt: String,
 }
 
 /// Auto-sized widths of the agents table columns that size to their content.
@@ -179,6 +180,7 @@ struct AgentColumnWidths {
     pr_title: u16,
     pr_issues: u16,
     title: u16,
+    prompt: u16,
 }
 
 /// Columns to render, given the configured order. The PR column carries content
@@ -233,6 +235,7 @@ fn agent_cell(column: AgentColumn, row: &AgentRowData, palette: &ThemePalette) -
         AgentColumn::Status => Cell::from(format::spans_to_line(row.status_spans.clone())),
         AgentColumn::Time => Cell::from(row.duration_line.clone()),
         AgentColumn::Title => Cell::from(row.title.clone()),
+        AgentColumn::Prompt => Cell::from(row.prompt.clone()),
     }
 }
 
@@ -261,6 +264,7 @@ fn build_agent_table(
             AgentColumn::Status => format::ResourceHeaderCell::Plain("Status"),
             AgentColumn::Time => format::ResourceHeaderCell::Plain("Time"),
             AgentColumn::Title => format::ResourceHeaderCell::Plain("Title"),
+            AgentColumn::Prompt => format::ResourceHeaderCell::Plain("Prompt"),
         })
         .collect();
 
@@ -305,6 +309,8 @@ fn build_agent_table(
             // its content like any other column, leaving the slack at the end.
             AgentColumn::Title if index == last_column => Constraint::Fill(1),
             AgentColumn::Title => Constraint::Length(widths.title),
+            AgentColumn::Prompt if index == last_column => Constraint::Fill(1),
+            AgentColumn::Prompt => Constraint::Length(widths.prompt),
         })
         .collect();
 
@@ -396,6 +402,11 @@ fn render_table(f: &mut Frame, app: &mut App, area: Rect) {
                     t.strip_prefix("... ").unwrap_or(t).to_string()
                 })
                 .unwrap_or_default();
+            let prompt = app
+                .agent_prompts
+                .get(&agent.pane_id)
+                .cloned()
+                .unwrap_or_default();
             let status_spans = app.get_status_display(agent);
             let elapsed = app.get_elapsed(agent);
             let duration = elapsed
@@ -444,6 +455,7 @@ fn render_table(f: &mut Frame, app: &mut App, area: Rect) {
                 status_spans,
                 duration_line,
                 title,
+                prompt,
             }
         })
         .collect();
@@ -499,6 +511,8 @@ fn render_table(f: &mut Frame, app: &mut App, area: Rect) {
     // size to its content. Capped to leave room for the columns after it.
     let titles: Vec<String> = row_data.iter().map(|r| r.title.clone()).collect();
     let max_title_width = format::calc_column_width(&titles, 5, 60, 1);
+    let prompts: Vec<String> = row_data.iter().map(|r| r.prompt.clone()).collect();
+    let max_prompt_width = format::calc_column_width(&prompts, 6, 60, 1);
 
     let table = build_agent_table(
         &columns,
@@ -511,6 +525,7 @@ fn render_table(f: &mut Frame, app: &mut App, area: Rect) {
             pr_title: max_pr_title_width,
             pr_issues: max_pr_issues_width,
             title: max_title_width,
+            prompt: max_prompt_width,
         },
         format::ResourceHeaderState {
             palette: &app.palette,
@@ -839,6 +854,7 @@ mod tests {
             status_spans: vec![("work".to_string(), Style::default())],
             duration_line: format::elapsed_time_line("00:42".to_string(), Some(42), palette),
             title: "the title".to_string(),
+            prompt: "fix the flaky test".to_string(),
         }
     }
 
@@ -856,6 +872,7 @@ mod tests {
                 pr_title: 20,
                 pr_issues: 12,
                 title: 12,
+                prompt: 24,
             },
             format::ResourceHeaderState {
                 palette: &palette,
@@ -917,6 +934,18 @@ mod tests {
         assert_eq!(
             render_line(&[AgentColumn::Worktree, AgentColumn::Title], 1),
             "wt        the title"
+        );
+    }
+
+    #[test]
+    fn agents_table_renders_opt_in_prompt() {
+        assert_eq!(
+            render_line(&[AgentColumn::Worktree, AgentColumn::Prompt], 0),
+            "Worktree  Prompt"
+        );
+        assert_eq!(
+            render_line(&[AgentColumn::Worktree, AgentColumn::Prompt], 1),
+            "wt        fix the flaky test"
         );
     }
 
