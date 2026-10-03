@@ -142,4 +142,11 @@ dev-build:
     @echo "Built: $(pwd)/target/release/workmux"
 
 # Run the contribution checks and produce a release binary for host testing.
-dev-verify: check-ci itest dev-build
+# The venv PATH mirrors CI's GITHUB_PATH setup so checkle can invoke ruff/pyright.
+dev-verify:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    export PATH="$PWD/tests/venv/bin:$PATH"
+    just check-ci
+    just itest
+    just dev-build
