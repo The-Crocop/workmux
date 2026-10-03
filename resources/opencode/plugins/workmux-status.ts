@@ -15,7 +15,8 @@ export const WorkmuxStatusPlugin: Plugin = async ({ $ }) => {
   const acceptBusyBySession = new Map<string, boolean>();
   const deletedSessions = new Set<string>();
   const childSessions = new Set<string>();
-  const currentUserMessageBySession = new Map<string, string>();
+  const lastUserMessageBySession = new Map<string, string>();
+  const currentPromptMessageBySession = new Map<string, string>();
   const promptPartsByMessage = new Map<string, Map<string, string>>();
   let reportedStatus: string | undefined;
   let statusQueue = Promise.resolve();
@@ -108,15 +109,26 @@ export const WorkmuxStatusPlugin: Plugin = async ({ $ }) => {
 
       if (event.type === 'message.updated' && event.properties.info.role === 'user') {
         const info = event.properties.info;
+        const previousUserMessageID = lastUserMessageBySession.get(info.sessionID);
+
+        // OpenCode may emit message.updated repeatedly for the same user message.
+        // Only a genuinely new user message should re-arm lifecycle tracking.
+        if (previousUserMessageID === info.id) {
+          return;
+        }
+
+        lastUserMessageBySession.set(info.sessionID, info.id);
         acceptBusyBySession.set(info.sessionID, true);
+
         if (!childSessions.has(info.sessionID)) {
-          const previousMessageID = currentUserMessageBySession.get(info.sessionID);
-          if (previousMessageID && previousMessageID !== info.id) {
-            promptPartsByMessage.delete(previousMessageID);
+          const previousPromptMessageID = currentPromptMessageBySession.get(info.sessionID);
+          if (previousPromptMessageID) {
+            promptPartsByMessage.delete(previousPromptMessageID);
           }
-          currentUserMessageBySession.set(info.sessionID, info.id);
+          currentPromptMessageBySession.set(info.sessionID, info.id);
           promptPartsByMessage.set(info.id, new Map());
         }
+
         await setStatus(info.sessionID, 'working');
       }
 
@@ -127,7 +139,7 @@ export const WorkmuxStatusPlugin: Plugin = async ({ $ }) => {
           !part.synthetic &&
           !part.ignored &&
           acceptBusyBySession.get(part.sessionID) !== false &&
-          currentUserMessageBySession.get(part.sessionID) === part.messageID
+          currentPromptMessageBySession.get(part.sessionID) === part.messageID
         ) {
           const parts = promptPartsByMessage.get(part.messageID) ?? new Map<string, string>();
           parts.set(part.id, part.text);
@@ -164,10 +176,11 @@ export const WorkmuxStatusPlugin: Plugin = async ({ $ }) => {
           deletedSessions.add(sessionID);
           childSessions.delete(sessionID);
           acceptBusyBySession.delete(sessionID);
-          const messageID = currentUserMessageBySession.get(sessionID);
-          currentUserMessageBySession.delete(sessionID);
-          if (messageID) {
-            promptPartsByMessage.delete(messageID);
+          lastUserMessageBySession.delete(sessionID);
+          const promptMessageID = currentPromptMessageBySession.get(sessionID);
+          currentPromptMessageBySession.delete(sessionID);
+          if (promptMessageID) {
+            promptPartsByMessage.delete(promptMessageID);
           }
           if (statusBySession.delete(sessionID)) {
             await reportAggregateStatus();
