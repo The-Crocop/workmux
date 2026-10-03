@@ -1762,11 +1762,10 @@ mod tests {
         store.delete_agent(&key).unwrap();
         assert!(store.get_agent(&key).unwrap().is_none());
         assert!(
-            store
+            !store
                 .load_agent_prompts(&key.backend, &key.instance)
                 .unwrap()
-                .get(&key.pane_id)
-                .is_none()
+                .contains_key(&key.pane_id)
         );
     }
 
