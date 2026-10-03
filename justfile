@@ -132,3 +132,21 @@ release *ARGS:
 # Internal release helper
 _release bump *ARGS:
     @cargo-release --skip-publish {{bump}} {{ARGS}}
+
+
+# Build a release binary from the reproducible devcontainer environment.
+# The workspace is bind-mounted, so target/release/workmux is also visible
+# from the host after the container exits.
+dev-build:
+    cargo build --release --locked
+    @echo "Built: $(pwd)/target/release/workmux"
+
+# Run the contribution checks and produce a release binary for host testing.
+# The venv PATH mirrors CI's GITHUB_PATH setup so checkle can invoke ruff/pyright.
+dev-verify:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    export PATH="$PWD/tests/venv/bin:$PATH"
+    just check-ci
+    just itest
+    just dev-build

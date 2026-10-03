@@ -14,6 +14,9 @@ export const WorkmuxStatusPlugin: Plugin = async ({ $ }) => {
   const statusBySession = new Map<string, string>();
   const acceptBusyBySession = new Map<string, boolean>();
   const deletedSessions = new Set<string>();
+  const childSessions = new Set<string>();
+  const currentUserMessageBySession = new Map<string, string>();
+  const promptPartsByMessage = new Map<string, Map<string, string>>();
   let reportedStatus: string | undefined;
   let statusQueue = Promise.resolve();
 
@@ -21,10 +24,24 @@ export const WorkmuxStatusPlugin: Plugin = async ({ $ }) => {
     return $`workmux set-window-status ${status}`.quiet().then(() => {}, () => {});
   }
 
+  function writePrompt(prompt: string) {
+    return $`workmux set-window-status working --prompt ${prompt}`
+      .quiet()
+      .then(() => {}, () => {});
+  }
+
   function queueStatus(status: string) {
     statusQueue = statusQueue.then(
       () => writeStatus(status),
       () => writeStatus(status),
+    );
+    return statusQueue;
+  }
+
+  function queuePrompt(prompt: string) {
+    statusQueue = statusQueue.then(
+      () => writePrompt(prompt),
+      () => writePrompt(prompt),
     );
     return statusQueue;
   }
@@ -80,8 +97,46 @@ export const WorkmuxStatusPlugin: Plugin = async ({ $ }) => {
 
   return {
     event: async ({ event }) => {
+      if (event.type === 'session.created' || event.type === 'session.updated') {
+        const info = event.properties.info;
+        if (info.parentID) {
+          childSessions.add(info.id);
+        } else {
+          childSessions.delete(info.id);
+        }
+      }
+
       if (event.type === 'message.updated' && event.properties.info.role === 'user') {
-        acceptBusyBySession.set(event.properties.sessionID, true);
+        const info = event.properties.info;
+        acceptBusyBySession.set(info.sessionID, true);
+        if (!childSessions.has(info.sessionID)) {
+          const previousMessageID = currentUserMessageBySession.get(info.sessionID);
+          if (previousMessageID && previousMessageID !== info.id) {
+            promptPartsByMessage.delete(previousMessageID);
+          }
+          currentUserMessageBySession.set(info.sessionID, info.id);
+          promptPartsByMessage.set(info.id, new Map());
+        }
+        await setStatus(info.sessionID, 'working');
+      }
+
+      if (event.type === 'message.part.updated') {
+        const part = event.properties.part;
+        if (
+          part.type === 'text' &&
+          !part.synthetic &&
+          !part.ignored &&
+          acceptBusyBySession.get(part.sessionID) !== false &&
+          currentUserMessageBySession.get(part.sessionID) === part.messageID
+        ) {
+          const parts = promptPartsByMessage.get(part.messageID) ?? new Map<string, string>();
+          parts.set(part.id, part.text);
+          promptPartsByMessage.set(part.messageID, parts);
+          const prompt = [...parts.values()].join('\n').trim();
+          if (prompt) {
+            await queuePrompt(prompt);
+          }
+        }
       }
 
       switch (event.type) {
@@ -107,7 +162,13 @@ export const WorkmuxStatusPlugin: Plugin = async ({ $ }) => {
         case 'session.deleted': {
           const sessionID = event.properties.info.id;
           deletedSessions.add(sessionID);
+          childSessions.delete(sessionID);
           acceptBusyBySession.delete(sessionID);
+          const messageID = currentUserMessageBySession.get(sessionID);
+          currentUserMessageBySession.delete(sessionID);
+          if (messageID) {
+            promptPartsByMessage.delete(messageID);
+          }
           if (statusBySession.delete(sessionID)) {
             await reportAggregateStatus();
           }

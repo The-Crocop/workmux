@@ -265,6 +265,8 @@ pub enum AgentColumn {
     Time,
     /// Agent pane title.
     Title,
+    /// Latest user prompt reported by the agent integration.
+    Prompt,
 }
 
 /// Columns used when the config does not set `dashboard.agent_columns`.
