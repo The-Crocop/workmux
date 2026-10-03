@@ -31,6 +31,16 @@ export default function (pi: ExtensionAPI) {
     await pi.exec("workmux", ["register-agent"]).catch(() => {});
   });
 
+  pi.on("before_agent_start", async (event, ctx) => {
+    if (ctx.agent.kind === "sub" || !event.prompt.trim()) return;
+    await pi.exec("workmux", [
+      "set-window-status",
+      "working",
+      "--prompt",
+      event.prompt,
+    ]).catch(() => {});
+  });
+
   pi.on("agent_start", async () => {
     await setStatus("working");
   });
