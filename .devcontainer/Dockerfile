@@ -24,7 +24,9 @@ ENV BUN_INSTALL=/opt/bun
 ENV PATH=/opt/bun/bin:/home/vscode/.cargo/bin:${PATH}
 
 RUN curl -fsSL https://bun.sh/install | bash -s "bun-v${BUN_VERSION}" \
-    && chmod -R a+rX /opt/bun
+    && chmod -R a+rX /opt/bun \
+    && ln -sf /opt/bun/bin/bun /usr/local/bin/bun \
+    && bun --version
 
 USER vscode
 
