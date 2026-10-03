@@ -30,5 +30,7 @@ RUN curl -fsSL https://bun.sh/install | bash -s "bun-v${BUN_VERSION}" \
 
 USER vscode
 
-RUN rustup component add clippy rustfmt \
+RUN rustup toolchain install 1.98.0 --component clippy --component rustfmt \
+    && rustup default 1.98.0 \
+    && rustc --version \
     && cargo install checkle just --locked
