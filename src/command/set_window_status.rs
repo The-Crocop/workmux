@@ -306,8 +306,14 @@ impl HookInput {
     }
 
     fn prompt(&self) -> Option<&str> {
-        if self.agent_id.as_deref().is_some_and(|value| !value.is_empty())
-            || self.agent_type.as_deref().is_some_and(|value| !value.is_empty())
+        if self
+            .agent_id
+            .as_deref()
+            .is_some_and(|value| !value.is_empty())
+            || self
+                .agent_type
+                .as_deref()
+                .is_some_and(|value| !value.is_empty())
             || self
                 .subagent_type
                 .as_deref()
@@ -315,7 +321,9 @@ impl HookInput {
         {
             return None;
         }
-        self.prompt.as_deref().filter(|value| !value.trim().is_empty())
+        self.prompt
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
     }
 
     fn transcript_path(&self) -> Option<&Path> {
