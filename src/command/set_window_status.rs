@@ -919,6 +919,10 @@ mod tests {
         let hook = HookInput {
             session_id: Some("session-new".to_string()),
             transcript_path: Some(new_transcript.display().to_string()),
+            prompt: None,
+            agent_id: None,
+            agent_type: None,
+            subagent_type: None,
         };
 
         assert!(continuation_owns_ancestry_pane(
@@ -939,6 +943,10 @@ mod tests {
                     .display()
                     .to_string(),
             ),
+            prompt: None,
+            agent_id: None,
+            agent_type: None,
+            subagent_type: None,
         };
         assert!(!continuation_owns_ancestry_pane(
             &agents,
