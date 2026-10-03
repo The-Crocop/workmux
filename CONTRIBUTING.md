@@ -36,53 +36,6 @@ pip install -r tests/requirements.txt
 just install-dev
 ```
 
-## Dev container (optional)
-
-If you do not want to install the Rust/Python/Bun development toolchain on your
-host, the repository includes a dev container that mirrors the CI dependencies.
-
-It contains stable Rust with clippy/rustfmt, Python, tmux, fish/zsh, Bun 1.3.14,
-`checkle`, and `just`. Its setup script creates `tests/venv/`, installs the
-Python lint/type-check dependencies used by CI, and installs the documentation
-dependencies.
-
-### VS Code / Dev Container compatible editor
-
-Open the repository in the dev container and wait for the post-create setup to
-finish. Then run:
-
-```bash
-just dev-verify
-```
-
-This runs `just check-ci`, the full tmux integration suite via `just itest`,
-and finally builds `target/release/workmux`.
-
-### Docker from the command line
-
-You can use the same environment without an editor integration:
-
-```bash
-docker build -f .devcontainer/Dockerfile -t workmux-dev .
-docker run --rm -it \
-  -v "$PWD:/workspaces/workmux" \
-  -w /workspaces/workmux \
-  workmux-dev \
-  bash -lc 'bash .devcontainer/setup.sh && just dev-verify'
-```
-
-Because the repository is bind-mounted, the successful release build is left at
-`target/release/workmux` on the host. On Linux, you can test that exact binary
-from the host without installing the Rust/Python/Bun development dependencies.
-
-Before opening a pull request, the expected result is:
-
-```text
-just check-ci  ✓
-just itest     ✓
-dev-build      ✓
-```
-
 ## Running tests
 
 Tests are written in Python using pytest and run against an isolated multiplexer
