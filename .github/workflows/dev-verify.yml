@@ -27,6 +27,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes fish tmux zsh
+          zsh -f -c 'autoload -Uz compaudit; compaudit' | xargs -r sudo chmod go-w
       - name: Install development dependencies
         run: |
           cargo install checkle just --locked
