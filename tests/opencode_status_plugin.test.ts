@@ -225,6 +225,19 @@ describe('WorkmuxStatusPlugin', () => {
     expect(harness.statuses).toEqual(['working', 'done', 'working']);
   });
 
+  test('does not resume working for a repeated update of the same user message', async () => {
+    const harness = await createHarness();
+
+    await harness.emit(userMessage('parent', 'msg-1'));
+    await harness.emit(sessionStatus('parent', 'busy'));
+    await harness.emit(sessionStatus('parent', 'idle'));
+
+    // OpenCode may update metadata on the same user message after the turn is done.
+    await harness.emit(userMessage('parent', 'msg-1'));
+
+    expect(harness.statuses).toEqual(['working', 'done']);
+  });
+
   test('reports the latest user prompt text', async () => {
     const harness = await createHarness();
 
