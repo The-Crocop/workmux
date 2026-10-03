@@ -325,9 +325,7 @@ impl App {
             .and_then(|store| store.load_reconciled_agents(self.mux.as_ref()))
             .unwrap_or_default();
         self.agent_prompts = StateStore::open_read_only()
-            .and_then(|store| {
-                store.load_agent_prompts(self.mux.name(), &self.mux.instance_id())
-            })
+            .and_then(|store| store.load_agent_prompts(self.mux.name(), &self.mux.instance_id()))
             .unwrap_or_default();
 
         // Load interrupted pane IDs from daemon runtime state
