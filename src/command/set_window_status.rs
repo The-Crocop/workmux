@@ -302,8 +302,14 @@ struct HookInput {
     #[serde(default, rename = "subagentType", deserialize_with = "lenient_string")]
     subagent_type: Option<String>,
     /// Sent by Copilot's `sessionStart`, which can fire after the prompt's
-    /// `userPromptSubmitted` event.
-    #[serde(default, rename = "initialPrompt", deserialize_with = "lenient_string")]
+    /// `userPromptSubmitted` event. Copilot uses the snake_case name for
+    /// hooks in Claude Code's format.
+    #[serde(
+        default,
+        rename = "initialPrompt",
+        alias = "initial_prompt",
+        deserialize_with = "lenient_string"
+    )]
     initial_prompt: Option<String>,
 }
 
@@ -355,8 +361,7 @@ impl HookInput {
 const MAX_PROMPT_CHARS: usize = 500;
 
 /// Reduce prompt text to a single display line, or `None` when nothing
-/// readable remains. Agent-injected `<system-reminder>` turns are not user
-/// prompts and are rejected.
+/// readable remains or the text is an agent-injected turn.
 pub(crate) fn normalize_prompt(raw: &str) -> Option<String> {
     let mut text = String::new();
     for word in raw.split_whitespace() {
@@ -369,7 +374,7 @@ pub(crate) fn normalize_prompt(raw: &str) -> Option<String> {
         }
         text.push_str(&word);
     }
-    if text.is_empty() || text.starts_with("<system-reminder>") {
+    if text.is_empty() || is_injected_turn(&text) {
         return None;
     }
     if text.chars().count() > MAX_PROMPT_CHARS {
@@ -378,6 +383,22 @@ pub(crate) fn normalize_prompt(raw: &str) -> Option<String> {
         text.push('…');
     }
     Some(text)
+}
+
+/// Agents deliver their own turns (reminders, background task results,
+/// teammate messages) through the prompt hook wrapped in XML-style elements,
+/// such as `<task-notification>...</task-notification>`.
+fn is_injected_turn(text: &str) -> bool {
+    let Some(rest) = text.strip_prefix('<') else {
+        return false;
+    };
+    let name_len = rest
+        .find(|c: char| !(c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'))
+        .unwrap_or(rest.len());
+    let name = &rest[..name_len];
+    !name.is_empty()
+        && rest[name_len..].starts_with(['>', ' '])
+        && text.ends_with(&format!("</{name}>"))
 }
 
 /// Decide how a status write changes the stored prompt. Capture follows the
@@ -834,6 +855,25 @@ mod tests {
             normalize_prompt("\n <system-reminder>wake</system-reminder>"),
             None
         );
+        assert_eq!(
+            normalize_prompt(
+                "<task-notification>\n<status>completed</status>\n</task-notification>"
+            ),
+            None
+        );
+        assert_eq!(
+            normalize_prompt("<teammate-message teammate_id=\"a\">hi</teammate-message>"),
+            None
+        );
+        // Prompts that only start with markup are still the user's.
+        assert_eq!(
+            normalize_prompt("<div> is misaligned"),
+            Some("<div> is misaligned".to_string())
+        );
+        assert_eq!(
+            normalize_prompt("<b>bold</b> renders wrong"),
+            Some("<b>bold</b> renders wrong".to_string())
+        );
 
         let long = normalize_prompt(&"word ".repeat(200)).unwrap();
         assert_eq!(long.chars().count(), MAX_PROMPT_CHARS);
@@ -885,6 +925,12 @@ mod tests {
             parse_hook_input(r#"{"sessionId":"s","source":"new","initialPrompt":"fix the bug"}"#)
                 .unwrap();
         assert_eq!(copilot.initial_prompt(), Some("fix the bug"));
+
+        let claude_format = parse_hook_input(
+            r#"{"hook_event_name":"SessionStart","session_id":"s","initial_prompt":"fix it"}"#,
+        )
+        .unwrap();
+        assert_eq!(claude_format.initial_prompt(), Some("fix it"));
     }
 
     #[test]
