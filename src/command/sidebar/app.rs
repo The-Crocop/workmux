@@ -1648,6 +1648,19 @@ fn resolved_template_strings(
     }
 }
 
+/// Whether an agent template the sidebar renders, grouped or not, shows
+/// `{prompt}`.
+pub(crate) fn templates_use_prompt(templates: &TemplatesConfig) -> bool {
+    [false, true].into_iter().any(|grouped| {
+        let (parsed, _) = parse_templates(&resolved_template_strings(Some(templates), grouped));
+        std::iter::once(&parsed.compact)
+            .chain(&parsed.tiles)
+            .chain(&parsed.horizontal)
+            .flatten()
+            .any(|token| *token == Token::Field(TokenId::Prompt))
+    })
+}
+
 fn default_template_lines(default_lines: &[&str]) -> Vec<Vec<Token>> {
     default_lines
         .iter()
@@ -2176,6 +2189,7 @@ mod tests {
             window_cmd: None,
             agent_command: None,
             agent_kind: None,
+            prompt: None,
         }
     }
 
@@ -2362,6 +2376,7 @@ mod grouping_tests {
             window_cmd: None,
             agent_command: None,
             agent_kind: None,
+            prompt: None,
         }
     }
 
@@ -3071,6 +3086,7 @@ mod filter_tests {
                 window_cmd: None,
                 agent_command: None,
                 agent_kind: None,
+                prompt: None,
             },
             AgentPane {
                 session: "s".to_string(),
@@ -3087,6 +3103,7 @@ mod filter_tests {
                 window_cmd: None,
                 agent_command: None,
                 agent_kind: None,
+                prompt: None,
             },
         ];
         let active_panes = std::collections::HashSet::from(["%2".to_string()]);

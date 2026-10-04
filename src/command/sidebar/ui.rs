@@ -23,6 +23,7 @@ use super::template::layout::{
 };
 use super::template::parser::Token;
 use super::template::row::{GroupStatusCount, HeaderContext};
+use crate::util::display_width;
 
 /// Compute pane suffixes like " (1)", " (2)" for agents sharing the same window.
 fn compute_pane_suffixes(agents: &[AgentPane]) -> Vec<String> {
@@ -1762,13 +1763,6 @@ fn no_agents_line(app: &SidebarApp) -> Line<'static> {
     }
 }
 
-/// Get the display width of a string, counting wide chars as 2.
-pub(crate) fn display_width(s: &str) -> usize {
-    s.chars()
-        .map(|c| UnicodeWidthChar::width(c).unwrap_or(1))
-        .sum()
-}
-
 #[cfg(test)]
 mod tests {
     use ratatui::Terminal;
@@ -1817,6 +1811,7 @@ mod tests {
                 window_cmd: None,
                 agent_command: None,
                 agent_kind: None,
+                prompt: None,
             });
         }
         app.rebuild_rows();
@@ -2243,6 +2238,7 @@ mod tests {
                 window_cmd: None,
                 agent_command: Some("claude".to_string()),
                 agent_kind: Some("claude".to_string()),
+                prompt: None,
             })
             .collect();
         app.rebuild_rows();

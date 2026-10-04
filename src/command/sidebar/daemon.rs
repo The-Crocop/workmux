@@ -2686,6 +2686,7 @@ mod tests {
             window_cmd: None,
             agent_command: None,
             agent_kind: None,
+            prompt: None,
         }
     }
 
@@ -4303,6 +4304,7 @@ mod tests {
                 boot_id: None,
                 agent_kind: None,
                 agent_session_id: None,
+                prompt: None,
             };
             store.upsert_agent(&state).unwrap();
         }

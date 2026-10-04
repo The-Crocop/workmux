@@ -399,68 +399,6 @@ impl StateStore {
         self.base_path.join("agents")
     }
 
-    /// Path to persisted last-prompt sidecars.
-    fn prompts_dir(&self) -> PathBuf {
-        self.base_path.join("agent-prompts")
-    }
-
-    fn prompt_path(&self, pane_key: &PaneKey) -> PathBuf {
-        let mut filename = PathBuf::from(pane_key.to_filename());
-        filename.set_extension("txt");
-        self.prompts_dir().join(filename)
-    }
-
-    /// Persist the latest user prompt for an agent pane.
-    pub fn set_agent_prompt(&self, pane_key: &PaneKey, prompt: &str) -> Result<()> {
-        let dir = self.prompts_dir();
-        fs::create_dir_all(&dir).context("Failed to create agent prompts directory")?;
-        write_atomic(&self.prompt_path(pane_key), prompt.as_bytes())
-            .context("Failed to write agent prompt")
-    }
-
-    /// Remove any persisted prompt for an agent pane.
-    pub fn clear_agent_prompt(&self, pane_key: &PaneKey) -> Result<()> {
-        match fs::remove_file(self.prompt_path(pane_key)) {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(error).context("Failed to remove agent prompt"),
-        }
-    }
-
-    /// Load latest prompts for one multiplexer instance, keyed by pane ID.
-    pub fn load_agent_prompts(
-        &self,
-        backend: &str,
-        instance: &str,
-    ) -> Result<HashMap<String, String>> {
-        let dir = self.prompts_dir();
-        if !dir.exists() {
-            return Ok(HashMap::new());
-        }
-
-        let mut prompts = HashMap::new();
-        for entry in fs::read_dir(dir)? {
-            let path = entry?.path();
-            if path.extension().and_then(|ext| ext.to_str()) != Some("txt") {
-                continue;
-            }
-            let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
-                continue;
-            };
-            let json_name = format!("{stem}.json");
-            let Some(key) = PaneKey::from_filename(&json_name) else {
-                continue;
-            };
-            if key.backend != backend || key.instance != instance {
-                continue;
-            }
-            if let Ok(prompt) = fs::read_to_string(&path) {
-                prompts.insert(key.pane_id, prompt);
-            }
-        }
-        Ok(prompts)
-    }
-
     /// Path to containers directory.
     fn containers_dir(&self) -> PathBuf {
         self.base_path.join("containers")
@@ -659,16 +597,19 @@ impl StateStore {
     ///
     /// Resets only the status fields so the pane identity and metadata survive
     /// an explicit clear. Returns whether a record existed for the key.
-    pub fn clear_agent_status(&self, key: &PaneKey) -> Result<bool> {
-        self.with_agent_lock(|store| store.clear_agent_status_locked(key))
+    pub fn clear_agent_status(&self, key: &PaneKey, clear_prompt: bool) -> Result<bool> {
+        self.with_agent_lock(|store| store.clear_agent_status_locked(key, clear_prompt))
     }
 
-    fn clear_agent_status_locked(&self, key: &PaneKey) -> Result<bool> {
+    fn clear_agent_status_locked(&self, key: &PaneKey, clear_prompt: bool) -> Result<bool> {
         let Some(mut state) = self.get_agent(key)? else {
             return Ok(false);
         };
         state.status = None;
         state.status_ts = None;
+        if clear_prompt {
+            state.prompt = None;
+        }
         state.updated_ts = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_secs())
@@ -687,15 +628,9 @@ impl StateStore {
     fn delete_agent_locked(&self, key: &PaneKey) -> Result<()> {
         let path = self.agent_path(key);
         match fs::remove_file(&path) {
-            Ok(()) => {}
-            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-            Err(e) => return Err(e).context("Failed to delete agent state"),
-        }
-
-        match fs::remove_file(self.prompt_path(key)) {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(e).context("Failed to delete agent prompt"),
+            Err(e) => Err(e).context("Failed to delete agent state"),
         }
     }
 
@@ -764,6 +699,11 @@ impl StateStore {
         let mut manifest = self.load_recovery_manifest_locked(backend, instance)?;
         for state in states {
             let source = RecoverySourceId::from(state);
+            // Resurrection does not use the prompt, so it is not archived.
+            let state = &AgentState {
+                prompt: None,
+                ..state.clone()
+            };
             if let Some(entry) = manifest
                 .entries
                 .iter_mut()
@@ -1682,6 +1622,7 @@ mod tests {
             boot_id: None,
             agent_kind: None,
             agent_session_id: None,
+            prompt: None,
         }
     }
 
@@ -1748,25 +1689,10 @@ mod tests {
         let state = test_agent_state(key.clone());
 
         store.upsert_agent(&state).unwrap();
-        store.set_agent_prompt(&key, "fix the flaky test").unwrap();
         assert!(store.get_agent(&key).unwrap().is_some());
-        assert_eq!(
-            store
-                .load_agent_prompts(&key.backend, &key.instance)
-                .unwrap()
-                .get(&key.pane_id)
-                .map(String::as_str),
-            Some("fix the flaky test")
-        );
 
         store.delete_agent(&key).unwrap();
         assert!(store.get_agent(&key).unwrap().is_none());
-        assert!(
-            !store
-                .load_agent_prompts(&key.backend, &key.instance)
-                .unwrap()
-                .contains_key(&key.pane_id)
-        );
     }
 
     #[test]
@@ -1787,7 +1713,7 @@ mod tests {
         state.agent_session_id = Some("session-1".to_string());
         store.upsert_agent(&state).unwrap();
 
-        assert!(store.clear_agent_status(&key).unwrap());
+        assert!(store.clear_agent_status(&key, false).unwrap());
 
         let cleared = store.get_agent(&key).unwrap().unwrap();
         assert_eq!(cleared.status, None);
@@ -1824,7 +1750,7 @@ mod tests {
             .upsert_agent(&test_agent_state(other_instance.clone()))
             .unwrap();
 
-        assert!(store.clear_agent_status(&target).unwrap());
+        assert!(store.clear_agent_status(&target, false).unwrap());
 
         assert_eq!(store.get_agent(&target).unwrap().unwrap().status, None);
         assert_eq!(
@@ -1842,7 +1768,7 @@ mod tests {
         let (store, _dir) = test_store();
         let key = test_pane_key();
 
-        assert!(!store.clear_agent_status(&key).unwrap());
+        assert!(!store.clear_agent_status(&key, false).unwrap());
         assert!(store.get_agent(&key).unwrap().is_none());
     }
 
@@ -2476,6 +2402,39 @@ mod tests {
                 .iter()
                 .any(|record| record.state.boot_id == old.boot_id)
         );
+    }
+
+    #[test]
+    fn clear_agent_status_removes_prompt_only_when_asked() {
+        let (store, _dir) = test_store();
+        let key = tmux_pane_key("%1");
+        let mut state = test_agent_state(key.clone());
+        state.prompt = Some("fix the bug".to_string());
+        store.upsert_agent(&state).unwrap();
+
+        store.clear_agent_status(&key, false).unwrap();
+        assert_eq!(
+            store.get_agent(&key).unwrap().unwrap().prompt.as_deref(),
+            Some("fix the bug")
+        );
+
+        store.clear_agent_status(&key, true).unwrap();
+        assert_eq!(store.get_agent(&key).unwrap().unwrap().prompt, None);
+    }
+
+    #[test]
+    fn recovery_entries_do_not_archive_prompts() {
+        let (store, _dir) = test_store();
+        let mut state = context_state("tmux", "default", 1, Some("old"), 1);
+        state.prompt = Some("fix the bug".to_string());
+        let manifest = store
+            .with_agent_lock(|store| {
+                store.merge_recovery_locked("tmux", "default", std::slice::from_ref(&state))?;
+                store.load_recovery_manifest_locked("tmux", "default")
+            })
+            .unwrap();
+        assert_eq!(manifest.entries.len(), 1);
+        assert_eq!(manifest.entries[0].state.prompt, None);
     }
 
     #[test]

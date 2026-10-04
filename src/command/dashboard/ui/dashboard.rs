@@ -3,7 +3,7 @@
 use ansi_to_tui::IntoText;
 use ratatui::{
     Frame,
-    layout::{Constraint, Layout, Rect},
+    layout::{Constraint, Flex, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Block, Cell, Paragraph, Row, Table},
@@ -235,8 +235,71 @@ fn agent_cell(column: AgentColumn, row: &AgentRowData, palette: &ThemePalette) -
         AgentColumn::Status => Cell::from(format::spans_to_line(row.status_spans.clone())),
         AgentColumn::Time => Cell::from(row.duration_line.clone()),
         AgentColumn::Title => Cell::from(row.title.clone()),
-        AgentColumn::Prompt => Cell::from(row.prompt.clone()),
+        AgentColumn::Prompt => {
+            Cell::from(row.prompt.clone()).style(Style::default().fg(palette.dimmed))
+        }
     }
+}
+
+/// Width of the highlight symbol the agents table reserves before its columns.
+const HIGHLIGHT_SYMBOL_WIDTH: u16 = 2;
+
+/// Cut prompts to the width their column receives. Prompts are long, and the
+/// table clips cell text without marking the cut.
+fn truncate_prompts(
+    row_data: &mut [AgentRowData],
+    columns: &[AgentColumn],
+    widths: &AgentColumnWidths,
+    table_width: u16,
+) {
+    let Some(index) = columns.iter().position(|c| *c == AgentColumn::Prompt) else {
+        return;
+    };
+    // Mirror the table's own column layout: a selection gutter, then the
+    // constraints laid out from the start with one cell of spacing.
+    let column_area = Rect::new(0, 0, table_width.saturating_sub(HIGHLIGHT_SYMBOL_WIDTH), 1);
+    let width = Layout::horizontal(agent_column_constraints(columns, widths))
+        .flex(Flex::Start)
+        .spacing(1)
+        .split(column_area)[index]
+        .width;
+    for row in row_data {
+        row.prompt = crate::util::truncate_with_ellipsis(&row.prompt, width as usize);
+    }
+}
+
+/// Width constraints of the configured agent columns, in order.
+fn agent_column_constraints(
+    columns: &[AgentColumn],
+    widths: &AgentColumnWidths,
+) -> Vec<Constraint> {
+    let last_column = columns.len().saturating_sub(1);
+    columns
+        .iter()
+        .enumerate()
+        .map(|(index, column)| match column {
+            AgentColumn::Number => Constraint::Length(2), // jump key
+            AgentColumn::Project => Constraint::Length(widths.project), // auto-sized
+            AgentColumn::Worktree => Constraint::Length(widths.worktree), // auto-sized
+            AgentColumn::Git => Constraint::Length(widths.git), // auto-sized
+            AgentColumn::Pr => Constraint::Length(widths.pr), // auto-sized
+            AgentColumn::PrTitle if index == last_column => Constraint::Fill(1),
+            AgentColumn::PrTitle => Constraint::Length(widths.pr_title),
+            AgentColumn::PrIssues if index == last_column => Constraint::Fill(1),
+            AgentColumn::PrIssues => Constraint::Length(widths.pr_issues),
+            AgentColumn::Window => Constraint::Length(4), // window index
+            AgentColumn::Status => Constraint::Length(8), // fixed (icons)
+            AgentColumn::Time => Constraint::Length(10),  // HH:MM:SS + padding
+            // A Fill column absorbs slack at its own position, which would
+            // strand every column after it against the right edge. Only the
+            // trailing title takes the remaining width; elsewhere it sizes to
+            // its content like any other column, leaving the slack at the end.
+            AgentColumn::Title if index == last_column => Constraint::Fill(1),
+            AgentColumn::Title => Constraint::Length(widths.title),
+            AgentColumn::Prompt if index == last_column => Constraint::Fill(1),
+            AgentColumn::Prompt => Constraint::Length(widths.prompt),
+        })
+        .collect()
 }
 
 /// Assemble the agents table. Header cells, row cells and width constraints are
@@ -286,33 +349,7 @@ fn build_agent_table(
         })
         .collect();
 
-    let last_column = columns.len().saturating_sub(1);
-    let constraints: Vec<Constraint> = columns
-        .iter()
-        .enumerate()
-        .map(|(index, column)| match column {
-            AgentColumn::Number => Constraint::Length(2), // jump key
-            AgentColumn::Project => Constraint::Length(widths.project), // auto-sized
-            AgentColumn::Worktree => Constraint::Length(widths.worktree), // auto-sized
-            AgentColumn::Git => Constraint::Length(widths.git), // auto-sized
-            AgentColumn::Pr => Constraint::Length(widths.pr), // auto-sized
-            AgentColumn::PrTitle if index == last_column => Constraint::Fill(1),
-            AgentColumn::PrTitle => Constraint::Length(widths.pr_title),
-            AgentColumn::PrIssues if index == last_column => Constraint::Fill(1),
-            AgentColumn::PrIssues => Constraint::Length(widths.pr_issues),
-            AgentColumn::Window => Constraint::Length(4), // window index
-            AgentColumn::Status => Constraint::Length(8), // fixed (icons)
-            AgentColumn::Time => Constraint::Length(10),  // HH:MM:SS + padding
-            // A Fill column absorbs slack at its own position, which would
-            // strand every column after it against the right edge. Only the
-            // trailing title takes the remaining width; elsewhere it sizes to
-            // its content like any other column, leaving the slack at the end.
-            AgentColumn::Title if index == last_column => Constraint::Fill(1),
-            AgentColumn::Title => Constraint::Length(widths.title),
-            AgentColumn::Prompt if index == last_column => Constraint::Fill(1),
-            AgentColumn::Prompt => Constraint::Length(widths.prompt),
-        })
-        .collect();
+    let constraints = agent_column_constraints(columns, &widths);
 
     let highlight_symbol = Text::from(Line::from(Span::styled(
         "▌ ",
@@ -351,7 +388,7 @@ fn render_table(f: &mut Frame, app: &mut App, area: Rect) {
     let mut window_positions: BTreeMap<(String, String), usize> = BTreeMap::new();
 
     // Pre-compute row data to calculate max widths
-    let row_data: Vec<_> = app
+    let mut row_data: Vec<_> = app
         .agents
         .iter()
         .enumerate()
@@ -402,11 +439,6 @@ fn render_table(f: &mut Frame, app: &mut App, area: Rect) {
                     t.strip_prefix("... ").unwrap_or(t).to_string()
                 })
                 .unwrap_or_default();
-            let prompt = app
-                .agent_prompts
-                .get(&agent.pane_id)
-                .cloned()
-                .unwrap_or_default();
             let status_spans = app.get_status_display(agent);
             let elapsed = app.get_elapsed(agent);
             let duration = elapsed
@@ -455,7 +487,7 @@ fn render_table(f: &mut Frame, app: &mut App, area: Rect) {
                 status_spans,
                 duration_line,
                 title,
-                prompt,
+                prompt: agent.prompt.clone().unwrap_or_default(),
             }
         })
         .collect();
@@ -514,19 +546,22 @@ fn render_table(f: &mut Frame, app: &mut App, area: Rect) {
     let prompts: Vec<String> = row_data.iter().map(|r| r.prompt.clone()).collect();
     let max_prompt_width = format::calc_column_width(&prompts, 6, 60, 1);
 
+    let widths = AgentColumnWidths {
+        project: max_project_width,
+        worktree: max_worktree_width,
+        git: max_git_width as u16,
+        pr: max_pr_width as u16,
+        pr_title: max_pr_title_width,
+        pr_issues: max_pr_issues_width,
+        title: max_title_width,
+        prompt: max_prompt_width,
+    };
+    truncate_prompts(&mut row_data, &columns, &widths, area.width);
+
     let table = build_agent_table(
         &columns,
         row_data,
-        AgentColumnWidths {
-            project: max_project_width,
-            worktree: max_worktree_width,
-            git: max_git_width as u16,
-            pr: max_pr_width as u16,
-            pr_title: max_pr_title_width,
-            pr_issues: max_pr_issues_width,
-            title: max_title_width,
-            prompt: max_prompt_width,
-        },
+        widths,
         format::ResourceHeaderState {
             palette: &app.palette,
             spinner_frame: app.spinner_frame,
@@ -854,7 +889,7 @@ mod tests {
             status_spans: vec![("work".to_string(), Style::default())],
             duration_line: format::elapsed_time_line("00:42".to_string(), Some(42), palette),
             title: "the title".to_string(),
-            prompt: "fix the flaky test".to_string(),
+            prompt: String::new(),
         }
     }
 
@@ -872,7 +907,7 @@ mod tests {
                 pr_title: 20,
                 pr_issues: 12,
                 title: 12,
-                prompt: 24,
+                prompt: 6,
             },
             format::ResourceHeaderState {
                 palette: &palette,
@@ -894,6 +929,75 @@ mod tests {
             .collect::<String>()
             .trim_end()
             .to_string()
+    }
+
+    fn widths() -> AgentColumnWidths {
+        AgentColumnWidths {
+            project: 8,
+            worktree: 9,
+            git: 6,
+            pr: 5,
+            pr_title: 20,
+            pr_issues: 12,
+            title: 12,
+            prompt: 60,
+        }
+    }
+
+    /// Render the agents table with the first row selected, after cutting
+    /// prompts to their column, and return the first row's line.
+    fn render_prompt_row(columns: &[AgentColumn], prompt: &str, width: u16) -> String {
+        let palette = palette();
+        let mut data = row(&palette);
+        data.prompt = prompt.to_string();
+        let mut rows = vec![data];
+        truncate_prompts(&mut rows, columns, &widths(), width);
+        let table = build_agent_table(
+            columns,
+            rows,
+            widths(),
+            format::ResourceHeaderState {
+                palette: &palette,
+                spinner_frame: 0,
+                git_fetching: false,
+                pr_fetching: false,
+            },
+        );
+
+        let mut state = TableState::default();
+        state.select(Some(0));
+        let mut terminal = Terminal::new(TestBackend::new(width, 3)).unwrap();
+        terminal
+            .draw(|f| f.render_stateful_widget(table, f.area(), &mut state))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        (0..width)
+            .map(|x| buffer[(x, 1)].symbol())
+            .collect::<String>()
+            .trim_end()
+            .to_string()
+    }
+
+    #[test]
+    fn trailing_prompt_is_cut_to_the_remaining_width_with_an_ellipsis() {
+        let columns = [AgentColumn::Worktree, AgentColumn::Prompt];
+        let line = render_prompt_row(&columns, "修正してください the dashboard layout bug", 30);
+        // A visible ellipsis proves the cut text fit: the table clips
+        // overflowing cells silently. Wide characters read back from the
+        // buffer with a blank continuation cell.
+        assert!(line.ends_with('…'), "{line:?}");
+        assert!(line.contains("修 正"), "{line:?}");
+
+        let short = render_prompt_row(&columns, "fix it", 30);
+        assert!(short.ends_with("fix it"), "{short:?}");
+    }
+
+    #[test]
+    fn inner_prompt_is_cut_to_its_content_width() {
+        let columns = [AgentColumn::Prompt, AgentColumn::Status];
+        let line = render_prompt_row(&columns, &"word ".repeat(30), 100);
+        assert!(line.contains("…"), "{line:?}");
+        assert!(line.trim_end().ends_with("work"), "{line:?}");
     }
 
     /// Reordered list, including the `#` jump key away from its usual place.
@@ -934,18 +1038,6 @@ mod tests {
         assert_eq!(
             render_line(&[AgentColumn::Worktree, AgentColumn::Title], 1),
             "wt        the title"
-        );
-    }
-
-    #[test]
-    fn agents_table_renders_opt_in_prompt() {
-        assert_eq!(
-            render_line(&[AgentColumn::Worktree, AgentColumn::Prompt], 0),
-            "Worktree  Prompt"
-        );
-        assert_eq!(
-            render_line(&[AgentColumn::Worktree, AgentColumn::Prompt], 1),
-            "wt        fix the flaky test"
         );
     }
 

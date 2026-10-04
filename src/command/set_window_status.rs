@@ -14,7 +14,7 @@ use crate::multiplexer::{
     STATUS_TARGET_INSTANCE_ENV, STATUS_TARGET_PANE_ENV, create_backend,
     create_backend_for_instance, detect_backend,
 };
-use crate::state::{AgentState, StateStore};
+use crate::state::{AgentState, PromptUpdate, StateStore};
 
 #[derive(ValueEnum, Debug, Clone)]
 pub enum SetWindowStatusCommand {
@@ -78,22 +78,18 @@ impl StatusTarget {
     }
 }
 
-pub fn run(cmd: SetWindowStatusCommand, prompt: Option<String>) -> Result<()> {
+pub fn run(cmd: SetWindowStatusCommand) -> Result<()> {
     if status_tracking_disabled() {
         return Ok(());
     }
 
-    let hook = read_hook_input();
-    let prompt = prompt
-        .as_deref()
-        .or_else(|| hook.as_ref().and_then(HookInput::prompt));
-
     // Inside a sandbox guest, route through RPC to the host supervisor
     if crate::sandbox::guest::is_sandbox_guest() {
-        return run_via_rpc(cmd, prompt);
+        return run_via_rpc(cmd);
     }
 
     let config = Config::load(None)?;
+    let hook = read_hook_input();
     run_for_status_target(hook.as_ref(), |mux, pane_id| {
         apply_status_update(
             &cmd,
@@ -101,7 +97,7 @@ pub fn run(cmd: SetWindowStatusCommand, prompt: Option<String>) -> Result<()> {
             mux,
             pane_id,
             hook.as_ref().and_then(HookInput::session_id),
-            prompt,
+            hook.as_ref().and_then(HookInput::prompt),
         )
     })
 }
@@ -116,6 +112,15 @@ pub fn register_agent() -> Result<()> {
     }
 
     let hook = read_hook_input();
+    // Registration starts a fresh record, so a missing prompt clears it.
+    // Config is read only for a prompt, so a broken config never blocks
+    // registration.
+    let prompt = match hook.as_ref().and_then(HookInput::initial_prompt) {
+        Some(raw) => Config::load(None).map_or(PromptUpdate::Clear, |config| {
+            prompt_update(&config, AgentStatus::Working, Some(raw))
+        }),
+        None => PromptUpdate::Clear,
+    };
     run_for_status_target(hook.as_ref(), |mux, pane_id| {
         let _ = mux.clear_status(pane_id);
         crate::state::persist_agent_registration(
@@ -124,6 +129,7 @@ pub fn register_agent() -> Result<()> {
             hook.as_ref()
                 .and_then(HookInput::session_id)
                 .map(str::to_string),
+            prompt,
         );
         crate::command::sidebar::request_refresh_for(mux);
         Ok(())
@@ -136,7 +142,7 @@ fn status_tracking_disabled() -> bool {
 
 fn run_for_status_target(
     hook: Option<&HookInput>,
-    mut update: impl FnMut(&dyn Multiplexer, &str) -> Result<()>,
+    update: impl FnOnce(&dyn Multiplexer, &str) -> Result<()>,
 ) -> Result<()> {
     match StatusTarget::from_env() {
         Ok(Some(target)) => {
@@ -194,7 +200,7 @@ fn apply_status_update(
     match cmd {
         SetWindowStatusCommand::Clear => {
             mux.clear_status(pane_id)?;
-            crate::state::clear_agent_status(mux, pane_id);
+            crate::state::clear_agent_status(mux, pane_id, !config.prompt_capture_enabled());
         }
         SetWindowStatusCommand::Working
         | SetWindowStatusCommand::Waiting
@@ -227,16 +233,8 @@ fn apply_status_update(
                 Some(status),
                 None,
                 agent_session_id.map(str::to_string),
+                prompt_update(config, status, prompt),
             );
-            if status == AgentStatus::Working
-                && config
-                    .dashboard
-                    .agent_columns()
-                    .contains(&crate::config::AgentColumn::Prompt)
-                && let Some(prompt) = prompt
-            {
-                crate::state::persist_agent_prompt(mux, pane_id, prompt);
-            }
         }
     }
 
@@ -293,11 +291,30 @@ fn status_backend_candidates_for(
 struct HookInput {
     session_id: Option<String>,
     transcript_path: Option<String>,
+    // Prompt fields are optional extras: a malformed value must not fail the
+    // parse that pane resolution depends on.
+    #[serde(default, deserialize_with = "lenient_string")]
     prompt: Option<String>,
+    /// Set by Codex for subagent turns.
+    #[serde(default, deserialize_with = "lenient_string")]
     agent_id: Option<String>,
-    agent_type: Option<String>,
-    #[serde(alias = "subagentType")]
+    /// Set by Grok inside subagent sessions.
+    #[serde(default, rename = "subagentType", deserialize_with = "lenient_string")]
     subagent_type: Option<String>,
+    /// Sent by Copilot's `sessionStart`, which can fire after the prompt's
+    /// `userPromptSubmitted` event.
+    #[serde(default, rename = "initialPrompt", deserialize_with = "lenient_string")]
+    initial_prompt: Option<String>,
+}
+
+fn lenient_string<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(match serde_json::Value::deserialize(deserializer)? {
+        serde_json::Value::String(value) => Some(value),
+        _ => None,
+    })
 }
 
 impl HookInput {
@@ -305,25 +322,25 @@ impl HookInput {
         self.session_id.as_deref().filter(|value| !value.is_empty())
     }
 
+    /// Prompt text submitted by the user to the top-level agent. Delegated
+    /// subagent turns carry the delegating agent's instructions instead.
     fn prompt(&self) -> Option<&str> {
-        if self
-            .agent_id
-            .as_deref()
-            .is_some_and(|value| !value.is_empty())
-            || self
-                .agent_type
-                .as_deref()
-                .is_some_and(|value| !value.is_empty())
-            || self
-                .subagent_type
-                .as_deref()
-                .is_some_and(|value| !value.is_empty())
-        {
+        self.top_level(&self.prompt)
+    }
+
+    /// Prompt that started the session, reported at registration.
+    fn initial_prompt(&self) -> Option<&str> {
+        self.top_level(&self.initial_prompt)
+    }
+
+    fn top_level<'a>(&self, value: &'a Option<String>) -> Option<&'a str> {
+        let delegated = [&self.agent_id, &self.subagent_type]
+            .iter()
+            .any(|value| value.as_deref().is_some_and(|value| !value.is_empty()));
+        if delegated {
             return None;
         }
-        self.prompt
-            .as_deref()
-            .filter(|value| !value.trim().is_empty())
+        value.as_deref()
     }
 
     fn transcript_path(&self) -> Option<&Path> {
@@ -331,6 +348,51 @@ impl HookInput {
             .as_deref()
             .filter(|value| !value.is_empty())
             .map(Path::new)
+    }
+}
+
+/// Longest stored prompt, in characters, including the trailing ellipsis.
+const MAX_PROMPT_CHARS: usize = 500;
+
+/// Reduce prompt text to a single display line, or `None` when nothing
+/// readable remains. Agent-injected `<system-reminder>` turns are not user
+/// prompts and are rejected.
+pub(crate) fn normalize_prompt(raw: &str) -> Option<String> {
+    let mut text = String::new();
+    for word in raw.split_whitespace() {
+        let word: String = word.chars().filter(|c| !c.is_control()).collect();
+        if word.is_empty() {
+            continue;
+        }
+        if !text.is_empty() {
+            text.push(' ');
+        }
+        text.push_str(&word);
+    }
+    if text.is_empty() || text.starts_with("<system-reminder>") {
+        return None;
+    }
+    if text.chars().count() > MAX_PROMPT_CHARS {
+        text = text.chars().take(MAX_PROMPT_CHARS - 1).collect::<String>();
+        text.truncate(text.trim_end().len());
+        text.push('…');
+    }
+    Some(text)
+}
+
+/// Decide how a status write changes the stored prompt. Capture follows the
+/// display configuration, so a disabled configuration clears retained text.
+pub(crate) fn prompt_update(
+    config: &Config,
+    status: AgentStatus,
+    raw_prompt: Option<&str>,
+) -> PromptUpdate {
+    if !config.prompt_capture_enabled() {
+        return PromptUpdate::Clear;
+    }
+    match (status, raw_prompt.and_then(normalize_prompt)) {
+        (AgentStatus::Working, Some(prompt)) => PromptUpdate::Set(prompt),
+        _ => PromptUpdate::Keep,
     }
 }
 
@@ -565,10 +627,14 @@ fn select_pane_for_agent_session(
 }
 
 fn register_via_rpc() -> Result<()> {
-    run_status_via_rpc("register", None)
+    let prompt = read_hook_input()
+        .as_ref()
+        .and_then(HookInput::initial_prompt)
+        .and_then(normalize_prompt);
+    run_status_via_rpc("register", prompt)
 }
 
-fn run_via_rpc(cmd: SetWindowStatusCommand, prompt: Option<&str>) -> Result<()> {
+fn run_via_rpc(cmd: SetWindowStatusCommand) -> Result<()> {
     let status = match cmd {
         SetWindowStatusCommand::Working => "working",
         SetWindowStatusCommand::Waiting => "waiting",
@@ -576,16 +642,23 @@ fn run_via_rpc(cmd: SetWindowStatusCommand, prompt: Option<&str>) -> Result<()> 
         SetWindowStatusCommand::Clear => "clear",
     };
 
+    // Delegation markers do not cross the RPC boundary, so the guest filters
+    // them. Normalizing also bounds the request size; the host applies the
+    // capture setting.
+    let prompt = read_hook_input()
+        .as_ref()
+        .and_then(HookInput::prompt)
+        .and_then(normalize_prompt);
     run_status_via_rpc(status, prompt)
 }
 
-fn run_status_via_rpc(status: &str, prompt: Option<&str>) -> Result<()> {
+fn run_status_via_rpc(status: &str, prompt: Option<String>) -> Result<()> {
     use crate::sandbox::rpc::{RpcClient, RpcRequest, RpcResponse};
 
     let mut client = RpcClient::from_env()?;
     let response = client.call(&RpcRequest::SetStatus {
         status: status.to_string(),
-        prompt: prompt.map(str::to_string),
+        prompt,
     })?;
 
     match response {
@@ -636,6 +709,7 @@ mod tests {
             boot_id: Some("boot-1".to_string()),
             agent_kind: Some("claude".to_string()),
             agent_session_id: Some(agent_session_id.to_string()),
+            prompt: None,
         }
     }
 
@@ -693,32 +767,124 @@ mod tests {
     #[test]
     fn parses_hook_identity_and_transcript() {
         let hook = parse_hook_input(
-            r#"{"session_id":"session-1","transcript_path":"/repo/session-1.jsonl","prompt":"fix the flaky test"}"#,
+            r#"{"session_id":"session-1","transcript_path":"/repo/session-1.jsonl"}"#,
         )
         .unwrap();
         assert_eq!(hook.session_id(), Some("session-1"));
-        assert_eq!(hook.prompt(), Some("fix the flaky test"));
         assert_eq!(
             hook.transcript_path(),
             Some(Path::new("/repo/session-1.jsonl"))
         );
 
-        let empty =
-            parse_hook_input(r#"{"session_id":"","transcript_path":"","prompt":""}"#).unwrap();
+        let empty = parse_hook_input(r#"{"session_id":"","transcript_path":""}"#).unwrap();
         assert_eq!(empty.session_id(), None);
-        assert_eq!(empty.prompt(), None);
         assert_eq!(empty.transcript_path(), None);
-        let subagent = parse_hook_input(
-            r#"{"prompt":"internal delegated task","agent_id":"agent-1","agent_type":"Explore"}"#,
+        assert!(parse_hook_input("not json").is_none());
+    }
+
+    #[test]
+    fn hook_prompt_is_read_from_top_level_turns() {
+        let claude = parse_hook_input(r#"{"session_id":"s","prompt":"fix the bug"}"#).unwrap();
+        assert_eq!(claude.prompt(), Some("fix the bug"));
+
+        let copilot =
+            parse_hook_input(r#"{"sessionId":"s","timestamp":1,"cwd":"/repo","prompt":"hi"}"#)
+                .unwrap();
+        assert_eq!(copilot.prompt(), Some("hi"));
+
+        let codex_subagent = parse_hook_input(
+            r#"{"session_id":"s","prompt":"delegated","agent_id":"a1","agent_type":"worker"}"#,
         )
         .unwrap();
-        assert_eq!(subagent.prompt(), None);
+        assert_eq!(codex_subagent.prompt(), None);
 
-        let grok_subagent =
-            parse_hook_input(r#"{"prompt":"internal task","subagentType":"explore"}"#).unwrap();
+        let grok_subagent = parse_hook_input(
+            r#"{"session_id":"s","sessionId":"s","prompt":"delegated","subagentType":"explore"}"#,
+        )
+        .unwrap();
+        assert_eq!(grok_subagent.session_id(), Some("s"));
         assert_eq!(grok_subagent.prompt(), None);
 
-        assert!(parse_hook_input("not json").is_none());
+        let empty_markers =
+            parse_hook_input(r#"{"prompt":"top","agent_id":"","subagentType":null}"#).unwrap();
+        assert_eq!(empty_markers.prompt(), Some("top"));
+    }
+
+    #[test]
+    fn malformed_prompt_fields_do_not_break_session_binding() {
+        let hook =
+            parse_hook_input(r#"{"session_id":"s","prompt":["text"],"agent_id":7}"#).unwrap();
+        assert_eq!(hook.session_id(), Some("s"));
+        assert_eq!(hook.prompt(), None);
+    }
+
+    #[test]
+    fn prompts_normalize_to_one_line() {
+        assert_eq!(
+            normalize_prompt("  fix\nthe\t\tbug\u{1b}[31m  "),
+            Some("fix the bug[31m".to_string())
+        );
+        assert_eq!(normalize_prompt(" \n\t "), None);
+        assert_eq!(normalize_prompt("\u{7}"), None);
+        assert_eq!(
+            normalize_prompt("<system-reminder>task finished</system-reminder>"),
+            None
+        );
+        assert_eq!(
+            normalize_prompt("\n <system-reminder>wake</system-reminder>"),
+            None
+        );
+
+        let long = normalize_prompt(&"word ".repeat(200)).unwrap();
+        assert_eq!(long.chars().count(), MAX_PROMPT_CHARS);
+        assert!(long.ends_with("word…"));
+        let exact = "x".repeat(MAX_PROMPT_CHARS);
+        assert_eq!(normalize_prompt(&exact), Some(exact));
+    }
+
+    #[test]
+    fn prompt_updates_follow_capture_setting_and_status() {
+        let disabled = Config::default();
+        assert_eq!(
+            prompt_update(&disabled, AgentStatus::Working, Some("fix")),
+            PromptUpdate::Clear
+        );
+        assert_eq!(
+            prompt_update(&disabled, AgentStatus::Done, None),
+            PromptUpdate::Clear
+        );
+
+        let enabled: Config =
+            serde_yaml::from_str("dashboard:\n  agent_columns: [prompt]\n").unwrap();
+        assert_eq!(
+            prompt_update(&enabled, AgentStatus::Working, Some("fix")),
+            PromptUpdate::Set("fix".to_string())
+        );
+        // Prompt-less events and blank prompts keep the previous prompt.
+        assert_eq!(
+            prompt_update(&enabled, AgentStatus::Working, None),
+            PromptUpdate::Keep
+        );
+        assert_eq!(
+            prompt_update(&enabled, AgentStatus::Working, Some("  ")),
+            PromptUpdate::Keep
+        );
+        // Only prompt submission reports `working`; other events that carry
+        // the prompt (Gemini `AfterAgent`) do not set it.
+        assert_eq!(
+            prompt_update(&enabled, AgentStatus::Done, Some("fix")),
+            PromptUpdate::Keep
+        );
+    }
+
+    #[test]
+    fn copilot_session_start_carries_the_initial_prompt() {
+        // Copilot fires `sessionStart` after `userPromptSubmitted`, so
+        // registration takes the prompt from `initialPrompt`.
+        let copilot =
+            parse_hook_input(r#"{"sessionId":"s","source":"new","initialPrompt":"fix the bug"}"#)
+                .unwrap();
+        assert_eq!(copilot.initial_prompt(), Some("fix the bug"));
     }
 
     #[test]
@@ -921,8 +1087,8 @@ mod tests {
             transcript_path: Some(new_transcript.display().to_string()),
             prompt: None,
             agent_id: None,
-            agent_type: None,
             subagent_type: None,
+            initial_prompt: None,
         };
 
         assert!(continuation_owns_ancestry_pane(
@@ -945,8 +1111,8 @@ mod tests {
             ),
             prompt: None,
             agent_id: None,
-            agent_type: None,
             subagent_type: None,
+            initial_prompt: None,
         };
         assert!(!continuation_owns_ancestry_pane(
             &agents,
