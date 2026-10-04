@@ -1,6 +1,6 @@
 import type { Plugin } from '@opencode-ai/plugin';
 
-export const WorkmuxStatusPlugin: Plugin = async ({ $ }) => {
+export const WorkmuxStatusPlugin: Plugin = async ({ $, client }) => {
   try {
     await $`workmux register-agent`.quiet();
   } catch {
@@ -14,36 +14,55 @@ export const WorkmuxStatusPlugin: Plugin = async ({ $ }) => {
   const statusBySession = new Map<string, string>();
   const acceptBusyBySession = new Map<string, boolean>();
   const deletedSessions = new Set<string>();
-  const childSessions = new Set<string>();
-  const currentUserMessageBySession = new Map<string, string>();
-  const promptPartsByMessage = new Map<string, Map<string, string>>();
+  // Subagent task sessions also receive user messages; only top-level
+  // sessions carry the user's own prompt.
+  const childBySession = new Map<string, boolean>();
   let reportedStatus: string | undefined;
+  let pendingPrompt: string | undefined;
   let statusQueue = Promise.resolve();
 
-  function writeStatus(status: string) {
-    return $`workmux set-window-status ${status}`.quiet().then(() => {}, () => {});
+  function writeStatus(status: string, prompt?: string) {
+    const command = prompt === undefined
+      ? $`workmux set-window-status ${status}`
+      : $`workmux set-window-status ${status} < ${new Response(JSON.stringify({ prompt }))}`;
+    return command.quiet().then(() => {}, () => {});
   }
 
-  function writePrompt(prompt: string) {
-    return $`workmux set-window-status working --prompt ${prompt}`
-      .quiet()
-      .then(() => {}, () => {});
-  }
-
-  function queueStatus(status: string) {
+  function queueStatus(status: string, prompt?: string) {
     statusQueue = statusQueue.then(
-      () => writeStatus(status),
-      () => writeStatus(status),
+      () => writeStatus(status, prompt),
+      () => writeStatus(status, prompt),
     );
     return statusQueue;
   }
 
-  function queuePrompt(prompt: string) {
-    statusQueue = statusQueue.then(
-      () => writePrompt(prompt),
-      () => writePrompt(prompt),
-    );
-    return statusQueue;
+  // A pending prompt rides the next `working` report, even a repeated one.
+  function takePrompt(status: string) {
+    if (status !== 'working') {
+      return undefined;
+    }
+    const prompt = pendingPrompt;
+    pendingPrompt = undefined;
+    return prompt;
+  }
+
+  async function isChildSession(sessionID: string) {
+    const known = childBySession.get(sessionID);
+    if (known !== undefined) {
+      return known;
+    }
+    try {
+      const result = await client.session.get({ path: { id: sessionID } });
+      if (!result.data) {
+        return true;
+      }
+      const isChild = Boolean(result.data.parentID);
+      childBySession.set(sessionID, isChild);
+      return isChild;
+    } catch {
+      // An unclassified session may be a subagent; skip its prompt.
+      return true;
+    }
   }
 
   async function reportAggregateStatus() {
@@ -56,12 +75,12 @@ export const WorkmuxStatusPlugin: Plugin = async ({ $ }) => {
       status = 'working';
     }
 
-    if (reportedStatus === status) {
+    if (reportedStatus === status && !(status === 'working' && pendingPrompt !== undefined)) {
       return;
     }
 
     reportedStatus = status;
-    await queueStatus(status);
+    await queueStatus(status, takePrompt(status));
   }
 
   async function setStatus(
@@ -96,50 +115,31 @@ export const WorkmuxStatusPlugin: Plugin = async ({ $ }) => {
   }
 
   return {
+    'chat.message': async ({ sessionID }, { parts }) => {
+      if (await isChildSession(sessionID)) {
+        return;
+      }
+      const prompt = parts
+        .flatMap((part) => (part.type === 'text' && !part.synthetic ? [part.text] : []))
+        .join('\n');
+      if (!prompt.trim()) {
+        return;
+      }
+      pendingPrompt = prompt;
+      // A message queued while the agent works starts no new busy transition.
+      if (reportedStatus === 'working') {
+        await queueStatus('working', takePrompt('working'));
+      }
+    },
     event: async ({ event }) => {
-      if (event.type === 'session.created' || event.type === 'session.updated') {
-        const info = event.properties.info;
-        if (info.parentID) {
-          childSessions.add(info.id);
-        } else {
-          childSessions.delete(info.id);
-        }
-      }
-
       if (event.type === 'message.updated' && event.properties.info.role === 'user') {
-        const info = event.properties.info;
-        acceptBusyBySession.set(info.sessionID, true);
-        if (!childSessions.has(info.sessionID)) {
-          const previousMessageID = currentUserMessageBySession.get(info.sessionID);
-          if (previousMessageID && previousMessageID !== info.id) {
-            promptPartsByMessage.delete(previousMessageID);
-          }
-          currentUserMessageBySession.set(info.sessionID, info.id);
-          promptPartsByMessage.set(info.id, new Map());
-        }
-        await setStatus(info.sessionID, 'working');
-      }
-
-      if (event.type === 'message.part.updated') {
-        const part = event.properties.part;
-        if (
-          part.type === 'text' &&
-          !part.synthetic &&
-          !part.ignored &&
-          acceptBusyBySession.get(part.sessionID) !== false &&
-          currentUserMessageBySession.get(part.sessionID) === part.messageID
-        ) {
-          const parts = promptPartsByMessage.get(part.messageID) ?? new Map<string, string>();
-          parts.set(part.id, part.text);
-          promptPartsByMessage.set(part.messageID, parts);
-          const prompt = [...parts.values()].join('\n').trim();
-          if (prompt) {
-            await queuePrompt(prompt);
-          }
-        }
+        acceptBusyBySession.set(event.properties.sessionID, true);
       }
 
       switch (event.type) {
+        case 'session.created':
+          childBySession.set(event.properties.info.id, Boolean(event.properties.info.parentID));
+          break;
         case 'session.status':
           if (event.properties.status.type === 'busy') {
             await setStatus(event.properties.sessionID, 'working');
@@ -162,13 +162,8 @@ export const WorkmuxStatusPlugin: Plugin = async ({ $ }) => {
         case 'session.deleted': {
           const sessionID = event.properties.info.id;
           deletedSessions.add(sessionID);
-          childSessions.delete(sessionID);
           acceptBusyBySession.delete(sessionID);
-          const messageID = currentUserMessageBySession.get(sessionID);
-          currentUserMessageBySession.delete(sessionID);
-          if (messageID) {
-            promptPartsByMessage.delete(messageID);
-          }
+          childBySession.delete(sessionID);
           if (statusBySession.delete(sessionID)) {
             await reportAggregateStatus();
           }

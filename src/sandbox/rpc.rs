@@ -26,6 +26,8 @@ use crate::sandbox::constant_time::constant_time_eq;
 pub enum RpcRequest {
     SetStatus {
         status: String,
+        /// Latest user prompt from the hook payload, already filtered for
+        /// delegated turns. The host decides whether to store it.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         prompt: Option<String>,
     },
@@ -61,6 +63,22 @@ pub enum RpcRequest {
     ClipboardRead {
         mime: String,
     },
+}
+
+impl RpcRequest {
+    /// Request type name, safe to log: payloads can carry user prompts.
+    fn kind(&self) -> &'static str {
+        match self {
+            RpcRequest::SetStatus { .. } => "SetStatus",
+            RpcRequest::SetTitle { .. } => "SetTitle",
+            RpcRequest::Heartbeat => "Heartbeat",
+            RpcRequest::SpawnAgent { .. } => "SpawnAgent",
+            RpcRequest::Exec { .. } => "Exec",
+            RpcRequest::Merge { .. } => "Merge",
+            RpcRequest::Close { .. } => "Close",
+            RpcRequest::ClipboardRead { .. } => "ClipboardRead",
+        }
+    }
 }
 
 /// RPC response sent from host to guest.
@@ -270,7 +288,7 @@ fn handle_connection(stream: TcpStream, ctx: &RpcContext) -> Result<()> {
         let request: RpcRequest = serde_json::from_str(line.trim())
             .with_context(|| format!("Failed to parse RPC request: {}", line.trim()))?;
 
-        info!(?request, "RPC request received");
+        info!(request = request.kind(), "RPC request received");
 
         // Exec and Merge require streaming multiple responses, handle separately
         if let RpcRequest::Exec {
@@ -460,7 +478,16 @@ fn handle_set_status(status: &str, prompt: Option<&str>, ctx: &RpcContext) -> Rp
         ),
         "register" => {
             let _ = ctx.mux.clear_status(&ctx.pane_id);
-            crate::state::persist_agent_registration(&*ctx.mux, &ctx.pane_id, None);
+            crate::state::persist_agent_registration(
+                &*ctx.mux,
+                &ctx.pane_id,
+                None,
+                crate::command::set_window_status::prompt_update(
+                    config,
+                    AgentStatus::Working,
+                    prompt,
+                ),
+            );
             crate::command::sidebar::request_refresh_for(&*ctx.mux);
             return RpcResponse::Ok;
         }
@@ -470,7 +497,11 @@ fn handle_set_status(status: &str, prompt: Option<&str>, ctx: &RpcContext) -> Rp
                     message: format!("Failed to clear status: {}", e),
                 };
             }
-            crate::state::clear_agent_status(&*ctx.mux, &ctx.pane_id);
+            crate::state::clear_agent_status(
+                &*ctx.mux,
+                &ctx.pane_id,
+                !config.prompt_capture_enabled(),
+            );
             crate::command::sidebar::request_refresh_for(&*ctx.mux);
             return RpcResponse::Ok;
         }
@@ -495,17 +526,8 @@ fn handle_set_status(status: &str, prompt: Option<&str>, ctx: &RpcContext) -> Rp
                     Some(agent_status),
                     None,
                     None,
+                    crate::command::set_window_status::prompt_update(config, agent_status, prompt),
                 );
-                if agent_status == AgentStatus::Working
-                    && ctx
-                        .config
-                        .dashboard
-                        .agent_columns()
-                        .contains(&crate::config::AgentColumn::Prompt)
-                    && let Some(prompt) = prompt
-                {
-                    crate::state::persist_agent_prompt(&*ctx.mux, &ctx.pane_id, prompt);
-                }
             }
             crate::command::sidebar::request_refresh_for(&*ctx.mux);
             RpcResponse::Ok
@@ -526,6 +548,7 @@ fn handle_set_title(title: &str, ctx: &RpcContext) -> RpcResponse {
                 None,
                 Some(title.to_string()),
                 None,
+                crate::state::PromptUpdate::Keep,
             );
             crate::command::sidebar::request_refresh_for(&*ctx.mux);
             RpcResponse::Ok
@@ -1056,12 +1079,30 @@ mod tests {
     fn test_request_serialization_set_status() {
         let req = RpcRequest::SetStatus {
             status: "working".to_string(),
-            prompt: Some("fix the flaky test".to_string()),
+            prompt: None,
         };
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains("\"type\":\"SetStatus\""));
         assert!(json.contains("\"status\":\"working\""));
-        assert!(json.contains("\"prompt\":\"fix the flaky test\""));
+    }
+
+    #[test]
+    fn set_status_prompt_is_optional_on_the_wire() {
+        let legacy: RpcRequest =
+            serde_json::from_str(r#"{"type":"SetStatus","status":"working"}"#).unwrap();
+        assert!(matches!(legacy, RpcRequest::SetStatus { prompt: None, .. }));
+
+        let req = RpcRequest::SetStatus {
+            status: "working".to_string(),
+            prompt: Some("fix the bug".to_string()),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let parsed: RpcRequest = serde_json::from_str(&json).unwrap();
+        assert!(matches!(
+            parsed,
+            RpcRequest::SetStatus { prompt: Some(ref prompt), .. } if prompt == "fix the bug"
+        ));
+        assert_eq!(req.kind(), "SetStatus");
     }
 
     #[test]

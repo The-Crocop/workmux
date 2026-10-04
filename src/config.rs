@@ -265,7 +265,7 @@ pub enum AgentColumn {
     Time,
     /// Agent pane title.
     Title,
-    /// Latest user prompt reported by the agent integration.
+    /// Latest prompt the user sent to the agent.
     Prompt,
 }
 
@@ -2638,6 +2638,19 @@ fn merge_grouped_templates(
 }
 
 impl Config {
+    /// Whether status hooks store the latest user prompt. Prompts are kept
+    /// only while the dashboard or sidebar is configured to show them.
+    pub fn prompt_capture_enabled(&self) -> bool {
+        self.dashboard
+            .agent_columns()
+            .contains(&AgentColumn::Prompt)
+            || self
+                .sidebar
+                .templates
+                .as_ref()
+                .is_some_and(crate::command::sidebar::templates_use_prompt)
+    }
+
     /// Load and merge global and project configurations.
     pub fn load(cli_agent: Option<&str>) -> anyhow::Result<Self> {
         Self::load_with_override(cli_agent, None)
@@ -3954,6 +3967,43 @@ mod tests {
             global.merge(project).dashboard.agent_columns(),
             vec![AgentColumn::Title, AgentColumn::Status]
         );
+    }
+
+    #[test]
+    fn prompt_capture_follows_prompt_display() {
+        let enabled = |yaml: &str| {
+            serde_yaml::from_str::<Config>(yaml)
+                .expect("config parses")
+                .prompt_capture_enabled()
+        };
+
+        assert!(!Config::default().prompt_capture_enabled());
+        assert!(enabled("dashboard:\n  agent_columns: [title, prompt]\n"));
+        assert!(!enabled("dashboard:\n  agent_columns: [title]\n"));
+        assert!(enabled(
+            "sidebar:\n  templates:\n    compact: '{primary} {prompt}'\n"
+        ));
+        assert!(enabled(
+            "sidebar:\n  templates:\n    horizontal: ['{primary}', '{prompt}']\n"
+        ));
+        assert!(enabled(
+            "sidebar:\n  templates:\n    grouped:\n      tiles: ['{primary}', '{prompt}']\n"
+        ));
+        assert!(enabled(
+            "sidebar:\n  templates:\n    grouped:\n      compact: '{prompt}'\n"
+        ));
+        // Escaped braces render literal text.
+        assert!(!enabled(
+            "sidebar:\n  templates:\n    compact: '{{prompt}}'\n"
+        ));
+        // Group headers cannot render agent tokens.
+        assert!(!enabled(
+            "sidebar:\n  templates:\n    grouped:\n      header: '{group} {prompt}'\n"
+        ));
+        // An invalid line makes the sidebar fall back to the default tiles.
+        assert!(!enabled(
+            "sidebar:\n  templates:\n    tiles: ['{prompt}', '{unclosed']\n"
+        ));
     }
 
     #[test]
