@@ -511,7 +511,16 @@ pub fn render_sidebar(f: &mut Frame, app: &mut SidebarApp) {
 /// on groups are listed while grouping is on, since that is the only time they
 /// have anything to act on.
 fn help_entries(app: &SidebarApp) -> Vec<(&'static str, &'static str)> {
-    let mut entries = vec![("j k", "move"), ("g G", "first last"), ("enter", "jump")];
+    let enter_label = match app.enter_action {
+        crate::config::SidebarEnterAction::Focus => "focus pane",
+        crate::config::SidebarEnterAction::Select => "show window",
+    };
+    let mut entries = vec![
+        ("j k", "move"),
+        ("g G", "first last"),
+        ("enter", enter_label),
+        ("o", "focus pane"),
+    ];
     if app.group_by.is_some() {
         entries.extend([
             ("h l", "fold unfold"),
@@ -1771,6 +1780,19 @@ mod tests {
     use super::*;
     use crate::agent_display::{sanitize_pane_title, strip_oc_title_prefix};
     use crate::command::sidebar::app::TemplateError;
+
+    #[test]
+    fn help_describes_enter_action_and_explicit_focus_key() {
+        let mut app = SidebarApp::test_with_template_error(TemplateError {
+            location: String::new(),
+            message: String::new(),
+        });
+        assert!(help_entries(&app).contains(&("enter", "focus pane")));
+        assert!(help_entries(&app).contains(&("o", "focus pane")));
+
+        app.enter_action = crate::config::SidebarEnterAction::Select;
+        assert!(help_entries(&app).contains(&("enter", "show window")));
+    }
 
     fn tile_fixture() -> SidebarApp {
         use super::super::template::parser::parse_line;
