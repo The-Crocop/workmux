@@ -72,7 +72,7 @@ impl ConnectionLimit {
 
     fn try_acquire(self: &Arc<Self>) -> Result<ConnectionPermit, usize> {
         self.active
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |active| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |active| {
                 (active < self.max).then_some(active + 1)
             })
             .map(|_| ConnectionPermit {
