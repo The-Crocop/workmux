@@ -5,9 +5,9 @@ import { WorkmuxStatusPlugin } from '../resources/opencode/plugins/workmux-statu
 async function createHarness({ failRegistration = false } = {}) {
   const statuses: string[] = [];
   const commands: string[] = [];
-  const shell = (strings: TemplateStringsArray, status?: string) => {
+  const shell = (strings: TemplateStringsArray, ...values: string[]) => {
     const command = strings.reduce(
-      (result, part, index) => result + part + (index < strings.length - 1 ? status : ''),
+      (result, part, index) => result + part + (index < strings.length - 1 ? values[index] : ''),
       '',
     );
     return {
@@ -16,8 +16,11 @@ async function createHarness({ failRegistration = false } = {}) {
         if (command === 'workmux register-agent' && failRegistration) {
           throw new Error('registration failed');
         }
-        if (status !== undefined) {
-          statuses.push(status);
+        if (
+          command.startsWith('workmux set-window-status ') &&
+          !command.includes(' --prompt ')
+        ) {
+          statuses.push(values[0]);
         }
       },
     };
@@ -38,9 +41,27 @@ const sessionStatus = (sessionID: string, type: 'busy' | 'idle') => ({
   properties: { sessionID, status: { type } },
 });
 
-const userMessage = (sessionID: string) => ({
+const userMessage = (sessionID: string, messageID = 'user-message') => ({
   type: 'message.updated',
-  properties: { sessionID, info: { role: 'user', sessionID } },
+  properties: { info: { id: messageID, role: 'user', sessionID } },
+});
+
+const sessionCreated = (sessionID: string, parentID?: string) => ({
+  type: 'session.created',
+  properties: { info: { id: sessionID, parentID } },
+});
+
+const userTextPart = (sessionID: string, messageID: string, text: string) => ({
+  type: 'message.part.updated',
+  properties: {
+    part: {
+      id: `${messageID}-text`,
+      sessionID,
+      messageID,
+      type: 'text',
+      text,
+    },
+  },
 });
 
 describe('WorkmuxStatusPlugin', () => {
@@ -202,6 +223,76 @@ describe('WorkmuxStatusPlugin', () => {
     await harness.emit(userMessage('parent'));
     await harness.emit(sessionStatus('parent', 'busy'));
     expect(harness.statuses).toEqual(['working', 'done', 'working']);
+  });
+
+  test('does not resume working for a repeated update of the same user message', async () => {
+    const harness = await createHarness();
+
+    await harness.emit(userMessage('parent', 'msg-1'));
+    await harness.emit(sessionStatus('parent', 'busy'));
+    await harness.emit(sessionStatus('parent', 'idle'));
+
+    // OpenCode may update metadata on the same user message after the turn is done.
+    await harness.emit(userMessage('parent', 'msg-1'));
+
+    expect(harness.statuses).toEqual(['working', 'done']);
+  });
+
+  test('reports the latest user prompt text', async () => {
+    const harness = await createHarness();
+
+    await harness.emit(userMessage('parent', 'msg-1'));
+    await harness.emit(userTextPart('parent', 'msg-1', 'can you fix this?'));
+
+    expect(harness.commands).toContain(
+      'workmux set-window-status working --prompt can you fix this?',
+    );
+  });
+
+  test('ignores late prompt parts after the session is done', async () => {
+    const harness = await createHarness();
+
+    await harness.emit(userMessage('parent', 'msg-late'));
+    await harness.emit(sessionStatus('parent', 'idle'));
+    await harness.emit(userTextPart('parent', 'msg-late', 'late text'));
+
+    expect(
+      harness.commands.some((command) => command.includes('--prompt late text')),
+    ).toBe(false);
+  });
+
+  test('does not report subagent user messages as the user prompt', async () => {
+    const harness = await createHarness();
+
+    await harness.emit(sessionCreated('child', 'parent'));
+    await harness.emit(userMessage('child', 'child-msg'));
+    await harness.emit(userTextPart('child', 'child-msg', 'internal delegated task'));
+
+    expect(
+      harness.commands.some((command) => command.includes('--prompt internal delegated task')),
+    ).toBe(false);
+  });
+
+  test('does not report assistant text as a user prompt', async () => {
+    const harness = await createHarness();
+
+    await harness.emit(userMessage('parent', 'msg-1'));
+    await harness.emit({
+      type: 'message.part.updated',
+      properties: {
+        part: {
+          id: 'assistant-text',
+          sessionID: 'parent',
+          messageID: 'assistant-message',
+          type: 'text',
+          text: 'assistant response',
+        },
+      },
+    });
+
+    expect(
+      harness.commands.some((command) => command.includes('--prompt assistant response')),
+    ).toBe(false);
   });
 
   test('reports waiting while another session is working', async () => {

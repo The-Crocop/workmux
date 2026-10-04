@@ -78,18 +78,22 @@ impl StatusTarget {
     }
 }
 
-pub fn run(cmd: SetWindowStatusCommand) -> Result<()> {
+pub fn run(cmd: SetWindowStatusCommand, prompt: Option<String>) -> Result<()> {
     if status_tracking_disabled() {
         return Ok(());
     }
 
+    let hook = read_hook_input();
+    let prompt = prompt
+        .as_deref()
+        .or_else(|| hook.as_ref().and_then(HookInput::prompt));
+
     // Inside a sandbox guest, route through RPC to the host supervisor
     if crate::sandbox::guest::is_sandbox_guest() {
-        return run_via_rpc(cmd);
+        return run_via_rpc(cmd, prompt);
     }
 
     let config = Config::load(None)?;
-    let hook = read_hook_input();
     run_for_status_target(hook.as_ref(), |mux, pane_id| {
         apply_status_update(
             &cmd,
@@ -97,6 +101,7 @@ pub fn run(cmd: SetWindowStatusCommand) -> Result<()> {
             mux,
             pane_id,
             hook.as_ref().and_then(HookInput::session_id),
+            prompt,
         )
     })
 }
@@ -184,6 +189,7 @@ fn apply_status_update(
     mux: &dyn Multiplexer,
     pane_id: &str,
     agent_session_id: Option<&str>,
+    prompt: Option<&str>,
 ) -> Result<()> {
     match cmd {
         SetWindowStatusCommand::Clear => {
@@ -222,6 +228,15 @@ fn apply_status_update(
                 None,
                 agent_session_id.map(str::to_string),
             );
+            if status == AgentStatus::Working
+                && config
+                    .dashboard
+                    .agent_columns()
+                    .contains(&crate::config::AgentColumn::Prompt)
+                && let Some(prompt) = prompt
+            {
+                crate::state::persist_agent_prompt(mux, pane_id, prompt);
+            }
         }
     }
 
@@ -278,11 +293,37 @@ fn status_backend_candidates_for(
 struct HookInput {
     session_id: Option<String>,
     transcript_path: Option<String>,
+    prompt: Option<String>,
+    agent_id: Option<String>,
+    agent_type: Option<String>,
+    #[serde(alias = "subagentType")]
+    subagent_type: Option<String>,
 }
 
 impl HookInput {
     fn session_id(&self) -> Option<&str> {
         self.session_id.as_deref().filter(|value| !value.is_empty())
+    }
+
+    fn prompt(&self) -> Option<&str> {
+        if self
+            .agent_id
+            .as_deref()
+            .is_some_and(|value| !value.is_empty())
+            || self
+                .agent_type
+                .as_deref()
+                .is_some_and(|value| !value.is_empty())
+            || self
+                .subagent_type
+                .as_deref()
+                .is_some_and(|value| !value.is_empty())
+        {
+            return None;
+        }
+        self.prompt
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
     }
 
     fn transcript_path(&self) -> Option<&Path> {
@@ -524,10 +565,10 @@ fn select_pane_for_agent_session(
 }
 
 fn register_via_rpc() -> Result<()> {
-    run_status_via_rpc("register")
+    run_status_via_rpc("register", None)
 }
 
-fn run_via_rpc(cmd: SetWindowStatusCommand) -> Result<()> {
+fn run_via_rpc(cmd: SetWindowStatusCommand, prompt: Option<&str>) -> Result<()> {
     let status = match cmd {
         SetWindowStatusCommand::Working => "working",
         SetWindowStatusCommand::Waiting => "waiting",
@@ -535,15 +576,16 @@ fn run_via_rpc(cmd: SetWindowStatusCommand) -> Result<()> {
         SetWindowStatusCommand::Clear => "clear",
     };
 
-    run_status_via_rpc(status)
+    run_status_via_rpc(status, prompt)
 }
 
-fn run_status_via_rpc(status: &str) -> Result<()> {
+fn run_status_via_rpc(status: &str, prompt: Option<&str>) -> Result<()> {
     use crate::sandbox::rpc::{RpcClient, RpcRequest, RpcResponse};
 
     let mut client = RpcClient::from_env()?;
     let response = client.call(&RpcRequest::SetStatus {
         status: status.to_string(),
+        prompt: prompt.map(str::to_string),
     })?;
 
     match response {
@@ -651,18 +693,31 @@ mod tests {
     #[test]
     fn parses_hook_identity_and_transcript() {
         let hook = parse_hook_input(
-            r#"{"session_id":"session-1","transcript_path":"/repo/session-1.jsonl"}"#,
+            r#"{"session_id":"session-1","transcript_path":"/repo/session-1.jsonl","prompt":"fix the flaky test"}"#,
         )
         .unwrap();
         assert_eq!(hook.session_id(), Some("session-1"));
+        assert_eq!(hook.prompt(), Some("fix the flaky test"));
         assert_eq!(
             hook.transcript_path(),
             Some(Path::new("/repo/session-1.jsonl"))
         );
 
-        let empty = parse_hook_input(r#"{"session_id":"","transcript_path":""}"#).unwrap();
+        let empty =
+            parse_hook_input(r#"{"session_id":"","transcript_path":"","prompt":""}"#).unwrap();
         assert_eq!(empty.session_id(), None);
+        assert_eq!(empty.prompt(), None);
         assert_eq!(empty.transcript_path(), None);
+        let subagent = parse_hook_input(
+            r#"{"prompt":"internal delegated task","agent_id":"agent-1","agent_type":"Explore"}"#,
+        )
+        .unwrap();
+        assert_eq!(subagent.prompt(), None);
+
+        let grok_subagent =
+            parse_hook_input(r#"{"prompt":"internal task","subagentType":"explore"}"#).unwrap();
+        assert_eq!(grok_subagent.prompt(), None);
+
         assert!(parse_hook_input("not json").is_none());
     }
 
@@ -864,6 +919,10 @@ mod tests {
         let hook = HookInput {
             session_id: Some("session-new".to_string()),
             transcript_path: Some(new_transcript.display().to_string()),
+            prompt: None,
+            agent_id: None,
+            agent_type: None,
+            subagent_type: None,
         };
 
         assert!(continuation_owns_ancestry_pane(
@@ -884,6 +943,10 @@ mod tests {
                     .display()
                     .to_string(),
             ),
+            prompt: None,
+            agent_id: None,
+            agent_type: None,
+            subagent_type: None,
         };
         assert!(!continuation_owns_ancestry_pane(
             &agents,
