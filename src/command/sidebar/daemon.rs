@@ -772,8 +772,13 @@ fn next_worker_timeout(pending: &HashMap<PathBuf, Instant>, debounce: Duration) 
 
 /// Refresh git status once for a worktree and publish it for every agent path.
 /// Returns true if any published status changed, ignoring cached_at.
-fn refresh_git_status(worktree: &Path, agent_paths: &[PathBuf], cache: &GitCache) -> bool {
-    let new_status = crate::git::get_git_status(worktree, None);
+fn refresh_git_status(
+    worktree: &Path,
+    agent_paths: &[PathBuf],
+    cache: &GitCache,
+    computations: &mut crate::git::GitStatusCache,
+) -> bool {
+    let new_status = crate::git::get_git_status_cached(worktree, None, computations);
     let Ok(mut cache) = cache.lock() else {
         return true;
     };
@@ -1338,6 +1343,7 @@ fn spawn_git_worker(
             }
         };
 
+        let mut computations = crate::git::GitStatusCache::default();
         let mut active_entries: Vec<GitWorkerPath> = Vec::new();
         let mut roots_by_agent: HashMap<PathBuf, Option<PathBuf>> = HashMap::new();
         let mut resolved_worktrees: HashMap<PathBuf, ResolvedGitWorktree> = HashMap::new();
@@ -1446,6 +1452,7 @@ fn spawn_git_worker(
                     unique_active = resolved_worktrees.keys().cloned().collect();
                     unique_active.sort();
                     let unique_set: HashSet<PathBuf> = unique_active.iter().cloned().collect();
+                    computations.retain(&unique_set);
                     gitignores.retain(|path, _| unique_set.contains(path));
                     ignored_tracked_paths.retain(|path, _| unique_set.contains(path));
                     pending_worktrees.retain(|path, _| unique_set.contains(path));
@@ -1577,7 +1584,12 @@ fn spawn_git_worker(
                 }
                 pending_worktrees.remove(&path);
                 if let Some(worktree) = resolved_worktrees.get(&path) {
-                    if refresh_git_status(&path, &worktree.agent_paths, &cache_clone) {
+                    if refresh_git_status(
+                        &path,
+                        &worktree.agent_paths,
+                        &cache_clone,
+                        &mut computations,
+                    ) {
                         any_changed = true;
                     }
                     last_refreshed.insert(path, Instant::now());
@@ -3690,7 +3702,8 @@ mod tests {
             assert!(refresh_git_status(
                 &parent,
                 &initial[&parent].agent_paths,
-                &cache
+                &cache,
+                &mut crate::git::GitStatusCache::default()
             ));
             assert_eq!(
                 cache.lock().unwrap()[&child].branch.as_deref(),
@@ -3767,7 +3780,8 @@ mod tests {
             assert!(refresh_git_status(
                 &child,
                 &resolved[&child].agent_paths,
-                &cache
+                &cache,
+                &mut crate::git::GitStatusCache::default()
             ));
             assert_eq!(
                 cache.lock().unwrap()[&child].branch.as_deref(),
@@ -3806,7 +3820,8 @@ mod tests {
                 assert!(refresh_git_status(
                     &parent,
                     &merged[&parent].agent_paths,
-                    &cache
+                    &cache,
+                    &mut crate::git::GitStatusCache::default()
                 ));
             }
             assert_eq!(
